@@ -44,9 +44,14 @@ pub fn run() {
         )
         .setup(|app| {
             if let Err(e) = setup(app.handle()) {
+                // Never leave capture running without a visible tray/window: stop the engine
+                // first, then report without blocking the main thread, then exit.
+                if let Some(state) = app.try_state::<AppState>() {
+                    state.engine.shutdown();
+                }
+                tracing::error!(error = %e, "startup failed");
                 let msg = format!("tuldMi could not start.\n\n{e}");
-                app.dialog().message(msg).title("tuldMi").kind(MessageDialogKind::Error).blocking_show();
-                std::process::exit(1);
+                app.dialog().message(msg).title("tuldMi").kind(MessageDialogKind::Error).show(|_| std::process::exit(1));
             }
             Ok(())
         })
@@ -105,19 +110,23 @@ fn setup(app: &AppHandle) -> Result<(), String> {
     if vad_model_path.is_none() {
         tracing::warn!("bundled Silero VAD model not found; using energy VAD");
     }
+    // The tray exists before the engine can start capturing, so recording is never invisible.
+    tray::create(app).map_err(|e| e.to_string())?;
+
     let sink = Arc::new(events::TauriSink::new(app.clone()));
     let engine = Engine::start(EngineConfig { data_dir: data_dir.clone(), vad_model_path, suppress_autostart: false }, sink).map_err(|e| e.to_string())?;
     let engine = Arc::new(engine);
     let settings = engine.settings();
     app.manage(AppState { engine: engine.clone(), data_dir, _log_guard: guard });
 
-    tray::create(app).map_err(|e| e.to_string())?;
     tray::update(app, &engine.status());
 
     if let Err(e) = register_shortcut(app, None, &settings.pause_shortcut) {
         tracing::warn!(error = %e, "pause shortcut not registered");
     }
-    sync_autostart(app, settings.launch_at_login);
+    if let Err(e) = sync_autostart(app, settings.launch_at_login) {
+        tracing::warn!(error = %e, "launch-at-login not applied");
+    }
 
     let minimized = std::env::args().any(|a| a == "--minimized");
     if !(minimized && settings.onboarding_complete) {
@@ -156,17 +165,15 @@ pub fn register_shortcut(app: &AppHandle, old: Option<&str>, new: &str) -> Resul
     gs.register(new).map_err(|e| format!("Could not register shortcut {new}: {e}"))
 }
 
-pub fn sync_autostart(app: &AppHandle, enabled: bool) {
+pub fn sync_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
     let al = app.autolaunch();
     let current = al.is_enabled().unwrap_or(false);
-    let result = match (enabled, current) {
+    match (enabled, current) {
         (true, false) => al.enable(),
         (false, true) => al.disable(),
         _ => Ok(()),
-    };
-    if let Err(e) = result {
-        tracing::warn!(error = %e, "launch-at-login change failed");
     }
+    .map_err(|e| format!("Could not change launch at login: {e}"))
 }
 
 fn shutdown(app: &AppHandle) {

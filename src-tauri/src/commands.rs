@@ -50,8 +50,14 @@ pub async fn get_settings(state: State<'_, AppState>) -> Res<Settings> {
 pub async fn update_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> Res<Settings> {
     let old = state.engine.settings();
     let saved = state.engine.update_settings(settings).map_err(err)?;
-    if old.launch_at_login != saved.launch_at_login {
-        crate::sync_autostart(&app, saved.launch_at_login);
+    if old.launch_at_login != saved.launch_at_login
+        && let Err(e) = crate::sync_autostart(&app, saved.launch_at_login)
+    {
+        // Don't let the setting claim something Windows didn't do.
+        let mut reverted = saved.clone();
+        reverted.launch_at_login = old.launch_at_login;
+        let _ = state.engine.update_settings(reverted);
+        return Err(e);
     }
     if old.pause_shortcut != saved.pause_shortcut
         && let Err(e) = crate::register_shortcut(&app, Some(&old.pause_shortcut), &saved.pause_shortcut)
