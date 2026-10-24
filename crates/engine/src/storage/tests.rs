@@ -49,7 +49,9 @@ fn connection_settings_paths_and_seed_ids_survive_reopen() -> Result<()> {
     {
         let connection = store.connection.lock();
         for (pragma, expected) in [
-            ("synchronous", 1),
+            // FULL: a committed event row must not roll back after power loss while its
+            // audio file survives (review R1 finding 7).
+            ("synchronous", 2),
             ("foreign_keys", 1),
             ("busy_timeout", 5000),
         ] {

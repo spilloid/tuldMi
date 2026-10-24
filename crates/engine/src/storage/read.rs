@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, Params, Row, params_from_iter};
 use uuid::Uuid;
 
+use super::paths;
 use crate::types::*;
 use crate::{Error, Result};
 
@@ -102,10 +103,13 @@ pub(super) fn events(
             };
             let expired = row.get::<_, Option<i64>>(17)?.is_some();
             let path: Option<String> = row.get(13)?;
-            let audio = if let Some(path) = path.filter(|_| !expired) {
+            let audio = if let Some(path) = path
+                .filter(|_| !expired)
+                .and_then(|path| paths::stored(root, &path))
+            {
                 Some(AudioRef {
                     asset_id: uuid(row, 12)?,
-                    path: root.join(path).to_string_lossy().into_owned(),
+                    path: path.to_string_lossy().into_owned(),
                     duration_ms: row.get(14)?,
                     bytes: row.get(15)?,
                     peaks: row.get(16)?,
@@ -172,7 +176,7 @@ pub(super) fn live_path(connection: &Connection, root: &Path, id: Uuid) -> Resul
             |row| row.get(0),
         )
         .optional()?;
-    Ok(path.map(|path| root.join(path)))
+    Ok(path.and_then(|path| paths::stored(root, &path)))
 }
 
 pub(super) fn paths(
@@ -183,7 +187,9 @@ pub(super) fn paths(
 ) -> Result<Vec<PathBuf>> {
     let mut statement = connection.prepare(sql)?;
     let paths = statement
-        .query_map(parameters, |row| Ok(root.join(row.get::<_, String>(0)?)))?
+        .query_map(parameters, |row| {
+            Ok(paths::stored(root, &row.get::<_, String>(0)?))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(paths)
+    Ok(paths.into_iter().flatten().collect())
 }

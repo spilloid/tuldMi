@@ -97,8 +97,11 @@ impl ToMono16k {
         Ok(())
     }
     /// Emit any buffered tail (zero-padded internally, trimmed to the true length).
+    /// An incomplete channel frame is discarded on error so subsequent input starts aligned.
     pub fn flush(&mut self, out: &mut Vec<f32>) -> crate::Result<()> {
         if self.channel_count != 0 {
+            self.channel_sum = 0.0;
+            self.channel_count = 0;
             return Err(crate::Error::Codec(
                 "incomplete interleaved channel frame".into(),
             ));
@@ -265,9 +268,11 @@ mod tests {
         out.clear();
         mono.process(&[f32::NAN], &mut out)?;
         assert!(mono.flush(&mut out).is_err());
-        mono.process(&[0.5, -0.5, 0.5], &mut out)?;
+        // The failed flush discards the partial frame, so later input is channel-aligned
+        // (review R1 finding 11): (0.5, -0.5) -> 0.0, then (0.5, 0.5) -> 0.5.
+        mono.process(&[0.5, -0.5, 0.5, 0.5], &mut out)?;
         mono.flush(&mut out)?;
-        assert_eq!(out, [0.25, 0.0]);
+        assert_eq!(out, [0.0, 0.5]);
         assert!(ToMono16k::new(0, 1).is_err());
         assert!(ToMono16k::new(16_000, 0).is_err());
         Ok(())
