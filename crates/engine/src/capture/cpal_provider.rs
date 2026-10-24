@@ -72,6 +72,9 @@ where
     f32: cpal::FromSample<T>,
 {
     let errors = tx.clone();
+    // WASAPI reports `Xrun` for DATA_DISCONTINUITY, which loopback raises routinely whenever
+    // playback starts or stops. It is not lost-to-us audio, so it is logged, not surfaced.
+    let xruns = Arc::new(AtomicU64::new(0));
     device
         .build_input_stream::<T, _, _>(
             *config,
@@ -92,6 +95,16 @@ where
                 }
             },
             move |error| {
+                // An xrun is a glitch, not a dead stream: the device keeps delivering audio.
+                // Tearing the stream down here (and reopening seconds later) loses far more
+                // speech than the glitch itself — found in live testing under ASR load.
+                if error.kind() == cpal::ErrorKind::Xrun {
+                    let n = xruns.fetch_add(1, Ordering::Relaxed) + 1;
+                    if n.is_power_of_two() {
+                        tracing::debug!(source = source.as_str(), xruns = n, "capture discontinuity");
+                    }
+                    return;
+                }
                 failed.store(true, Ordering::Release);
                 let _ = errors.try_send(CaptureMsg::Failed {
                     source,

@@ -4,6 +4,9 @@ use crate::capture::{CAPTURE_CHANNEL_CAPACITY, CaptureMsg, CaptureStream};
 use crate::clock::{StreamClock, WallAnchor};
 use crate::dsp::{LevelMeter, ToMono16k};
 use crate::segmenter::{FRAME_SAMPLES, Segmenter, SegmenterConfig, SpeechSegment};
+
+/// Frames per VAD call (8 x 32 ms = 256 ms).
+pub(crate) const VAD_BLOCK_FRAMES: usize = 8;
 use crate::storage::{NewAudio, NewEvent};
 use crate::vad::{SpeechDetector, best_detector};
 use crossbeam_channel::{Receiver, TrySendError};
@@ -266,7 +269,29 @@ impl Pipeline {
             return Vec::new();
         }
         self.pending.extend_from_slice(samples);
-        let usable = self.pending.len() / FRAME_SAMPLES * FRAME_SAMPLES;
+        // Feed the detector whole blocks: Silero (via whisper.cpp) resets its recurrent state
+        // per call and must replay context, so per-frame calls cost ~33x the inference and
+        // fell behind real time in live testing. 256 ms of extra VAD latency is covered by
+        // pre-roll. `flush_pending` drains any remainder.
+        const BLOCK: usize = VAD_BLOCK_FRAMES * FRAME_SAMPLES;
+        let usable = self.pending.len() / BLOCK * BLOCK;
+        self.run_frames(usable)
+    }
+
+    /// Run every buffered sample through VAD + segmenter, zero-padding the final partial frame.
+    fn flush_pending(&mut self) -> Vec<SpeechSegment> {
+        if self.pending.is_empty() {
+            return Vec::new();
+        }
+        let padded = self.pending.len().div_ceil(FRAME_SAMPLES) * FRAME_SAMPLES;
+        self.pending.resize(padded, 0.0);
+        self.run_frames(padded)
+    }
+
+    fn run_frames(&mut self, usable: usize) -> Vec<SpeechSegment> {
+        if usable == 0 {
+            return Vec::new();
+        }
         let probabilities = self.detector.push(&self.pending[..usable]);
         let mut finished = Vec::new();
         for (frame, prob) in self.pending[..usable]
@@ -354,17 +379,7 @@ impl Processor {
             }
             let mut segments = pipeline.samples(&tail, self.session.is_some());
             if self.session.is_some() {
-                if !pipeline.pending.is_empty() {
-                    let mut frame = std::mem::take(&mut pipeline.pending);
-                    frame.resize(FRAME_SAMPLES, 0.0);
-                    let prob = pipeline
-                        .detector
-                        .push(&frame)
-                        .first()
-                        .copied()
-                        .unwrap_or(0.0);
-                    segments.extend(pipeline.segmenter.push_frame(&frame, prob));
-                }
+                segments.extend(pipeline.flush_pending());
                 if let Some(segment) = pipeline.segmenter.flush() {
                     segments.push(segment);
                 }

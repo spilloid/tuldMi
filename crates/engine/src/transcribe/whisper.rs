@@ -56,7 +56,9 @@ impl TranscriptionProvider for WhisperProvider {
         }
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         let threads = std::thread::available_parallelism()
-            .map_or(1, |n| n.get().saturating_sub(1).clamp(1, 8));
+            // Half the cores (max 6): leaves headroom for the real-time capture threads —
+            // saturating every core caused WASAPI xruns in live testing.
+            .map_or(1, |n| (n.get() / 2).clamp(1, 6));
         params.set_n_threads(threads as i32);
         params.set_no_context(true);
         params.set_no_timestamps(false);
