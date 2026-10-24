@@ -43,7 +43,7 @@ Audio playback: `convertFileSrc(event.audio.path)` (asset protocol, scoped to th
 | `tuldmi://event-deleted` | `string` (event id) |
 | `tuldmi://model-progress` | `ModelProgress` |
 | `tuldmi://notice` | `{ level: "info" \| "warning" \| "error", message: string }` |
-| `tuldmi://navigate` | `{ view: "timeline" | "settings" | "search", section?: string }` — from tray menu. Settings sections: `audio`, `transcription`, `recording`, `retention`, `privacy`, `appearance`, `shortcuts`, `startup`, `storage`, `about`. |\| "settings" \| "search", section?: string }` — from tray menu |
+| `tuldmi://navigate` | `{ view: "timeline" \| "settings" \| "search", section?: string }` — from the tray menu. Settings sections: `audio`, `transcription`, `recording`, `retention`, `privacy`, `appearance`, `shortcuts`, `startup`, `storage`, `about`. |
 
 ## Window / tray behaviour
 
