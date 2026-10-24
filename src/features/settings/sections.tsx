@@ -14,10 +14,10 @@ import { useToast } from "../../components/ui/Toast";
 import { Logo } from "../../components/shell/Logo";
 import { ModelList } from "../shared/ModelList";
 import { SourceCard } from "../shared/SourceCard";
+import { MonitoringNote } from "../shared/MonitoringNote";
+import { useAppVersion } from "../../lib/version";
 import { IN_APP_SHORTCUTS } from "../shortcuts/ShortcutSheet";
 import { Group, Row, SectionHeader } from "./parts";
-
-export const APP_VERSION = "0.1.0";
 
 /** Save a settings patch, surfacing engine errors as toasts. */
 function usePatch() {
@@ -72,8 +72,8 @@ export function AudioSection() {
   // A device test opens devices without storing anything. Always closed on leave.
   useEffect(() => {
     if (!testing) return;
-    void backend.setMonitoring(true);
-    return () => void backend.setMonitoring(false);
+    void backend.setMonitoring(true).catch(() => {});
+    return () => void backend.setMonitoring(false).catch(() => {});
   }, [testing, backend]);
 
   if (!settings) return null;
@@ -109,6 +109,7 @@ export function AudioSection() {
           </Button>
         )}
       </div>
+      <MonitoringNote requested={testing && !recording} />
     </>
   );
 }
@@ -159,7 +160,7 @@ export function TranscriptionSection() {
         <Row label="Engine status" description="Capture never waits for transcription — a backlog simply catches up.">
           <Pill tone={engine.tone}>{engine.text}</Pill>
         </Row>
-        <Row label="Spoken language" description="Automatic detection works well for most speech; choose a language if detection guesses wrong.">
+        <Row label="Spoken language" description="Automatic detection works well for most speech; choose a language if detection guesses wrong. English-only models transcribe English only.">
           <Select label="Spoken language" value={settings.language} options={LANGUAGES} onChange={(v) => void save({ language: v })} className="w-[220px]" />
         </Row>
       </Group>
@@ -727,6 +728,8 @@ export function StorageSection() {
 // ---- About ---------------------------------------------------------------------------------------
 
 const NOTICES: [string, string, string][] = [
+  ["whisper.cpp, OpenAI Whisper weights", "MIT", "On-device transcription (models you download)"],
+  ["Silero VAD", "MIT", "Speech detection, bundled"],
   ["Tauri", "MIT or Apache-2.0", "Desktop shell"],
   ["React, React DOM", "MIT", "Interface"],
   ["Radix UI primitives", "MIT", "Accessible dialogs, menus, tooltips, switches, sliders"],
@@ -739,6 +742,8 @@ const NOTICES: [string, string, string][] = [
 ];
 
 export function AboutSection() {
+  const backend = useBackend();
+  const version = useAppVersion(backend.kind === "tauri");
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -747,7 +752,7 @@ export function AboutSection() {
         <div className="mt-5 font-display text-[34px] font-[480] tracking-[-0.02em] text-text">tuldMi</div>
         <div className="mt-1 font-display text-lg italic text-muted">Your conversations, remembered.</div>
         <div className="mt-4 flex items-center gap-2">
-          <Pill>Version {APP_VERSION}</Pill>
+          <Pill>Version {version}</Pill>
           <Pill>MIT License</Pill>
         </div>
       </div>

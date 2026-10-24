@@ -53,7 +53,6 @@ export class DemoBackend implements Backend {
   private listeners = new Map<string, Set<(p: unknown) => void>>();
   private timers: ReturnType<typeof setTimeout>[] = [];
   private liveIndex = 0;
-  private monitoring = false;
 
   constructor(opts: DemoOptions = {}) {
     const now = opts.now ?? Date.now();
@@ -63,6 +62,7 @@ export class DemoBackend implements Backend {
     this.settings = {
       ...DEFAULT_SETTINGS,
       onboardingComplete: !opts.fresh,
+      consentAcknowledgedAt: opts.fresh ? null : Date.now(),
       modelId: opts.fresh ? null : DEMO_MODEL_ID,
       retention: opts.fresh ? "days30" : "days7",
     };
@@ -70,6 +70,7 @@ export class DemoBackend implements Backend {
     const sessionId = this.events[this.events.length - 1]?.sessionId ?? "d3m0d3m0-0000-4000-8000-5e5510000001";
     this.status = {
       state: opts.fresh ? "stopped" : "recording",
+      monitoring: false,
       sessionId: opts.fresh ? null : sessionId,
       sessionStartedAt: opts.fresh ? null : now - 26 * 60_000,
       sources: [
@@ -177,6 +178,7 @@ export class DemoBackend implements Backend {
       ...this.status,
       state: paused ? "paused" : "recording",
       sessionId: paused ? this.status.sessionId : `d3m0d3m0-0000-4000-8000-5e55${String(now % 1e8).padStart(8, "0")}`,
+      monitoring: paused ? this.status.monitoring : false,
       sessionStartedAt: paused ? this.status.sessionStartedAt : now,
       sources: this.status.sources.map((s) => ({
         ...s,
@@ -188,9 +190,11 @@ export class DemoBackend implements Backend {
   }
 
   async setMonitoring(enabled: boolean) {
-    // The demo has no audio devices, so monitoring opens nothing and no levels flow.
-    this.monitoring = enabled;
-    void this.monitoring;
+    // The demo has no audio devices and no levels flow, but the flag follows the engine contract:
+    // ignored while recording, otherwise reported honestly in status.
+    if (this.status.state === "recording") return structuredClone(this.status);
+    this.status = { ...this.status, monitoring: enabled };
+    this.pushStatus();
     return structuredClone(this.status);
   }
 

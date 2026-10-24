@@ -14,6 +14,8 @@ import { Keys } from "../../components/ui/Kbd";
 import { useToast } from "../../components/ui/Toast";
 import { SourceCard } from "../shared/SourceCard";
 import { ModelList } from "../shared/ModelList";
+import { MonitoringNote } from "../shared/MonitoringNote";
+import { consentPatch, isAcknowledged } from "./consent";
 
 const STEPS = ["Welcome", "What's captured", "Privacy & storage", "Consent", "Devices", "Transcription", "Ready"] as const;
 
@@ -24,9 +26,10 @@ export function Onboarding({ step: initialStep }: { step: number }) {
   const reduced = useReducedMotion();
   const [step, setStep] = useState(Math.min(initialStep, STEPS.length - 1));
   const [dir, setDir] = useState(1);
-  const [ack, setAck] = useState(false);
 
   useEffect(() => setStep(Math.min(initialStep, STEPS.length - 1)), [initialStep]);
+
+  const ack = settings ? isAcknowledged(settings) : false;
 
   const go = (n: number) => {
     const next = Math.max(0, Math.min(STEPS.length - 1, n));
@@ -50,7 +53,7 @@ export function Onboarding({ step: initialStep }: { step: number }) {
       return;
     }
     try {
-      await patch({ onboardingComplete: true, captureOnLaunch: startRecording ? true : settings!.captureOnLaunch });
+      await patch({ onboardingComplete: true, consentAcknowledgedAt: settings!.consentAcknowledgedAt, captureOnLaunch: startRecording ? true : settings!.captureOnLaunch });
       await backend.setPaused(!startRecording);
       navigate("/timeline", { replace: true });
     } catch (e) {
@@ -119,7 +122,7 @@ export function Onboarding({ step: initialStep }: { step: number }) {
                 {step === 0 && <Welcome />}
                 {step === 1 && <Captured />}
                 {step === 2 && <PrivacyStep retention={settings.retention} onRetention={(r) => void save({ retention: r })} />}
-                {step === 3 && <Consent ack={ack} onAck={setAck} />}
+                {step === 3 && <Consent ack={ack} onAck={(v) => void save(consentPatch(v))} />}
                 {step === 4 && <Devices settings={settings} onChange={(p) => void save(p)} />}
                 {step === 5 && <ModelStep onSkip={() => go(6)} />}
                 {step === 6 && <Ready settings={settings} />}
@@ -331,8 +334,8 @@ function Devices({ settings, onChange }: { settings: Settings; onChange: (p: Par
   useEffect(() => {
     backend.listDevices().then(setDevices, () => setDevices([]));
     // Live test: devices open, levels flow, nothing is stored. Closed when leaving the step.
-    void backend.setMonitoring(true);
-    return () => void backend.setMonitoring(false);
+    void backend.setMonitoring(true).catch(() => {});
+    return () => void backend.setMonitoring(false).catch(() => {});
   }, [backend]);
   return (
     <>
@@ -353,6 +356,7 @@ function Devices({ settings, onChange }: { settings: Settings; onChange: (p: Par
           />
         ))}
       </div>
+      <MonitoringNote requested />
       {backend.kind === "demo" && (
         <p className="mt-3 text-sm text-faint">Demo mode has no audio devices, so the meters stay at rest. In the app they move with your voice.</p>
       )}
