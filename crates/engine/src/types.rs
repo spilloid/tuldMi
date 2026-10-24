@@ -398,6 +398,7 @@ pub struct StorageStats {
 
 /// Everything the engine pushes to the UI. The Tauri layer maps each variant to an event
 /// name (see `src-tauri/src/events.rs`).
+#[allow(clippy::large_enum_variant)] // cloned rarely; boxing would complicate every match site
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type", content = "payload")]
 pub enum EngineEvent {

@@ -44,7 +44,7 @@ pub struct NewEvent {
     pub audio: Option<NewAudio>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NewSegment {
     pub start_ms: i64,
     pub end_ms: i64,
