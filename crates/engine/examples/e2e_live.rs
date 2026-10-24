@@ -14,9 +14,12 @@ use tuldmi_engine::engine::{Engine, EngineConfig, EventSink};
 use tuldmi_engine::storage::InstalledModel;
 use tuldmi_engine::types::*;
 
-struct Sink(Mutex<Vec<EngineEvent>>);
+struct Sink(Mutex<Vec<EngineEvent>>, Mutex<Vec<(Instant, Source, EventStatus)>>);
 impl EventSink for Sink {
     fn emit(&self, e: EngineEvent) {
+        if let EngineEvent::EventUpserted(ev) = &e {
+            self.1.lock().push((Instant::now(), ev.source, ev.status));
+        }
         if !matches!(e, EngineEvent::Levels(_)) {
             self.0.lock().push(e);
         }
@@ -35,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let installed = dir.join("models").join(model.file_name().ok_or("model file")?);
     std::fs::copy(&model, &installed)?;
 
-    let sink = Arc::new(Sink(Mutex::new(vec![])));
+    let sink = Arc::new(Sink(Mutex::new(vec![]), Mutex::new(vec![])));
     let engine = Engine::start(EngineConfig { data_dir: dir.clone(), vad_model_path: Some(silero), suppress_autostart: true }, sink.clone())?;
     let entry = tuldmi_engine::models::entry("whisper-tiny.en").ok_or("catalog")?;
     engine.store().record_model(&InstalledModel { model_id: entry.id.into(), path: installed, bytes: entry.size_bytes, sha256: entry.sha256.into() })?;
@@ -47,10 +50,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let st = engine.set_paused(false)?;
     println!("state={:?} sources={:?}", st.state, st.sources.iter().map(|x| (x.source, x.state, x.device_name.clone())).collect::<Vec<_>>());
 
+    let started = Instant::now();
     let end = Instant::now() + Duration::from_secs(secs);
     while Instant::now() < end {
         std::thread::sleep(Duration::from_millis(250));
     }
+    println!("paused at t+{:.1}s", started.elapsed().as_secs_f32());
     engine.set_paused(true)?;
     // Let the transcription queue drain.
     let drain = Instant::now() + Duration::from_secs(60);
@@ -67,6 +72,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             e.audio.as_ref().map(|a| a.bytes).unwrap_or(0),
             text
         );
+    }
+    for (at, source, status) in sink.1.lock().iter() {
+        println!("upsert t+{:.1}s {source:?} {status:?}", at.duration_since(started).as_secs_f32());
     }
     let hits = engine.search(&SearchQuery { text: word.clone(), ..Default::default() })?;
     println!("search {word:?}: {} hit(s)", hits.len());
