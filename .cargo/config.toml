@@ -1,0 +1,3 @@
+[env]
+# whisper-rs-sys: use the pre-generated FFI bindings instead of running bindgen (no libclang needed).
+WHISPER_DONT_GENERATE_BINDINGS = "1"
