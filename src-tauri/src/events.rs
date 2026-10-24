@@ -41,7 +41,15 @@ impl EventSink for TauriSink {
     fn emit(&self, event: EngineEvent) {
         let result = match &event {
             EngineEvent::Status(s) => {
-                crate::tray::update(&self.app, s);
+                // Never call tray APIs from an engine thread: off the main thread they block
+                // until the main thread services them, and during exit it never does — that
+                // stalled the engine's flush and lost in-progress speech on Quit. Hand the
+                // update to the main thread fire-and-forget; drop it once we're exiting.
+                if !crate::is_exiting() {
+                    let app = self.app.clone();
+                    let status = s.clone();
+                    let _ = self.app.run_on_main_thread(move || crate::tray::update(&app, &status));
+                }
                 self.app.emit(STATUS, s)
             }
             EngineEvent::Levels(l) => self.app.emit(LEVELS, l),

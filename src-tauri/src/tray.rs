@@ -106,6 +106,8 @@ pub fn update(app: &AppHandle, s: &CaptureStatus) {
 
 fn snapshot(s: &CaptureStatus) -> Snapshot {
     let (glyph, status, toggle) = match s.state {
+        // Devices are open for a level test: say so, never "Paused"/"Not recording".
+        CaptureState::Stopped | CaptureState::Paused if s.monitoring => (Glyph::Recording, "Testing devices (nothing is saved)", "Start recording"),
         CaptureState::Recording => (Glyph::Recording, "Recording", "Pause recording"),
         CaptureState::Starting => (Glyph::Recording, "Starting...", "Pause recording"),
         CaptureState::Paused => (Glyph::Paused, "Paused", "Resume recording"),

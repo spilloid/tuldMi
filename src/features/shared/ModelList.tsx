@@ -184,7 +184,7 @@ function ModelCard({
       {failed && (
         <div className="mt-3 flex items-start gap-2 rounded-md bg-danger-soft px-3 py-2 text-sm text-text">
           <CircleAlert size={14} className="mt-[2px] shrink-0 text-danger" aria-hidden />
-          <span className="flex-1">{p?.error ?? "The download failed."} Your connection may have dropped — nothing partial is kept.</span>
+          <span className="flex-1">{p?.error ?? "The download failed."} Your connection may have dropped. You can try again; partial files are cleaned up automatically.</span>
           <button type="button" onClick={onDismiss} className="text-faint hover:text-text" aria-label="Dismiss">
             <X size={13} />
           </button>

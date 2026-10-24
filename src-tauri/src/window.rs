@@ -28,6 +28,17 @@ pub fn on_event(window: &Window, event: &WindowEvent) {
         let _ = window.hide();
         return;
     };
+    // A device test only makes sense while its screen is visible. Hiding the window never
+    // unmounts the test UI, so end monitoring here — otherwise the mic would stay open with
+    // the tray showing "Paused". Off the main thread: the engine call waits for a reply.
+    if state.engine.status().monitoring {
+        let engine = state.engine.clone();
+        let _ = std::thread::Builder::new().name("tuldmi-monitor-off".into()).spawn(move || {
+            if let Err(e) = engine.set_monitoring(false) {
+                tracing::warn!(error = %e, "stop monitoring on hide failed");
+            }
+        });
+    }
     let recording = matches!(state.engine.status().state, CaptureState::Recording | CaptureState::Starting);
     let marker = state.data_dir.join(NOTICE_MARKER);
     if !recording || marker.exists() {
@@ -47,8 +58,12 @@ pub fn on_event(window: &Window, event: &WindowEvent) {
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancelCustom("Keep recording".into(), "Pause recording".into()))
         .show(move |keep| {
-            if !keep && let Err(e) = engine.set_paused(true) {
-                tracing::warn!(error = %e, "pause from close dialog failed");
+            if !keep {
+                let _ = std::thread::Builder::new().name("tuldmi-pause".into()).spawn(move || {
+                    if let Err(e) = engine.set_paused(true) {
+                        tracing::warn!(error = %e, "pause from close dialog failed");
+                    }
+                });
             }
             let _ = win.hide();
         });

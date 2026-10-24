@@ -87,12 +87,22 @@ pub fn run() {
         });
 
     app.run(|app, event| match event {
-        // Windows are hidden, never closed, so this only fires for an explicit exit; keep the
-        // process alive otherwise (e.g. if a webview crashes) — capture runs in the tray.
+        // Windows are hidden, never closed, so a code-less request only happens if the last
+        // window goes away unexpectedly; keep running — capture lives in the tray.
         RunEvent::ExitRequested { code: None, api, .. } => api.prevent_exit(),
+        // Explicit quit (tray, `quit_app`): shut the engine down *now*, while the event loop is
+        // still alive, so in-progress speech is flushed and persisted before teardown.
+        RunEvent::ExitRequested { code: Some(_), .. } => shutdown(app),
+        // Fallback for exits that skip ExitRequested (e.g. Windows logoff). Idempotent.
         RunEvent::Exit => shutdown(app),
         _ => {}
     });
+}
+
+static EXITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn is_exiting() -> bool {
+    EXITING.load(std::sync::atomic::Ordering::Acquire)
 }
 
 fn setup(app: &AppHandle) -> Result<(), String> {
@@ -149,8 +159,15 @@ pub fn toggle_pause(app: &AppHandle) {
         return;
     }
     let recording = matches!(engine.status().state, CaptureState::Recording | CaptureState::Starting | CaptureState::Error);
-    if let Err(e) = engine.set_paused(recording) {
-        tracing::warn!(error = %e, "toggle pause failed");
+    // Tray and global-shortcut handlers run on the main thread; `set_paused` waits for the
+    // engine to flush, which may itself need the main thread. Never wait here.
+    let spawned = std::thread::Builder::new().name("tuldmi-toggle".into()).spawn(move || {
+        if let Err(e) = engine.set_paused(recording) {
+            tracing::warn!(error = %e, "toggle pause failed");
+        }
+    });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "toggle pause thread failed to start");
     }
 }
 
@@ -177,6 +194,7 @@ pub fn sync_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
 }
 
 fn shutdown(app: &AppHandle) {
+    EXITING.store(true, std::sync::atomic::Ordering::Release);
     if let Some(state) = app.try_state::<AppState>() {
         state.engine.shutdown();
     }
