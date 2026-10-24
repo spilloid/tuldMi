@@ -1,0 +1,154 @@
+/*
+ * tuldMi design tokens.
+ *
+ * Two themes share one vocabulary: "paper" (light) and "ink" (dark). Warm-neutral base,
+ * one primary accent (ember), two restrained source hues (Me = slate, Remote = sage), and a
+ * recording red that is reserved for the live-capture state only.
+ *
+ * Tokens are raw CSS custom properties here; tailwind.css maps them into Tailwind's @theme so
+ * utilities like `bg-surface`, `text-muted`, `border-line` exist.
+ */
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Surfaces, from the deepest canvas to the most raised layer. */
+  --tm-canvas: oklch(0.962 0.009 78);
+  --tm-sunken: oklch(0.948 0.01 78);
+  --tm-surface: oklch(0.982 0.006 80);
+  --tm-raised: oklch(0.995 0.003 80);
+  --tm-overlay: oklch(0.993 0.004 80);
+  --tm-hover: oklch(0.5 0.02 70 / 0.06);
+  --tm-press: oklch(0.5 0.02 70 / 0.1);
+  --tm-selected: oklch(0.5 0.02 70 / 0.085);
+
+  /* Lines. */
+  --tm-line: oklch(0.885 0.011 76);
+  --tm-line-soft: oklch(0.915 0.009 76);
+  --tm-line-strong: oklch(0.8 0.013 74);
+
+  /* Text. All pass 4.5:1 on canvas except `faint`, which is for non-essential metadata only. */
+  --tm-text: oklch(0.235 0.014 58);
+  --tm-muted: oklch(0.46 0.014 64);
+  --tm-faint: oklch(0.6 0.012 68);
+  --tm-on-accent: oklch(0.99 0.004 80);
+
+  /* Primary accent: ember. */
+  --tm-accent: oklch(0.585 0.135 50);
+  --tm-accent-strong: oklch(0.52 0.13 48);
+  --tm-accent-text: oklch(0.5 0.125 48);
+  --tm-accent-soft: oklch(0.93 0.04 62);
+  --tm-accent-line: oklch(0.82 0.08 58);
+
+  /* Sources. Hue only differentiates; labels always accompany. */
+  --tm-me: oklch(0.5 0.1 256);
+  --tm-me-text: oklch(0.47 0.1 256);
+  --tm-me-soft: oklch(0.935 0.022 256);
+  --tm-me-line: oklch(0.8 0.05 256);
+  --tm-remote: oklch(0.52 0.085 168);
+  --tm-remote-text: oklch(0.45 0.08 168);
+  --tm-remote-soft: oklch(0.935 0.022 168);
+  --tm-remote-line: oklch(0.8 0.05 168);
+
+  /* States. */
+  --tm-rec: oklch(0.585 0.2 27);
+  --tm-rec-soft: oklch(0.94 0.035 27);
+  --tm-danger: oklch(0.53 0.18 27);
+  --tm-danger-soft: oklch(0.945 0.03 27);
+  --tm-warning: oklch(0.56 0.12 75);
+  --tm-warning-soft: oklch(0.945 0.045 85);
+  --tm-success: oklch(0.52 0.1 152);
+  --tm-success-soft: oklch(0.94 0.03 152);
+
+  /* Focus ring. */
+  --tm-focus: oklch(0.585 0.135 50 / 0.55);
+
+  /* Elevation: soft, warm, low-spread shadows. Borders carry most of the hierarchy. */
+  --tm-shadow-1: 0 1px 0 oklch(0.3 0.02 60 / 0.04), 0 1px 2px oklch(0.3 0.02 60 / 0.05);
+  --tm-shadow-2: 0 1px 0 oklch(0.3 0.02 60 / 0.04), 0 4px 12px -2px oklch(0.3 0.02 60 / 0.08);
+  --tm-shadow-3: 0 1px 0 oklch(0.3 0.02 60 / 0.05), 0 18px 48px -12px oklch(0.25 0.02 60 / 0.22),
+    0 6px 16px -6px oklch(0.25 0.02 60 / 0.1);
+  --tm-scrim: oklch(0.25 0.015 60 / 0.28);
+
+  /* Skeleton shimmer. */
+  --tm-skeleton: oklch(0.9 0.01 76);
+  --tm-skeleton-hi: oklch(0.955 0.008 78);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --tm-canvas: oklch(0.172 0.007 68);
+  --tm-sunken: oklch(0.15 0.006 68);
+  --tm-surface: oklch(0.2 0.008 68);
+  --tm-raised: oklch(0.228 0.009 68);
+  --tm-overlay: oklch(0.235 0.009 68);
+  --tm-hover: oklch(0.9 0.02 75 / 0.055);
+  --tm-press: oklch(0.9 0.02 75 / 0.09);
+  --tm-selected: oklch(0.9 0.02 75 / 0.075);
+
+  --tm-line: oklch(0.29 0.009 68);
+  --tm-line-soft: oklch(0.25 0.008 68);
+  --tm-line-strong: oklch(0.37 0.011 68);
+
+  --tm-text: oklch(0.925 0.011 80);
+  --tm-muted: oklch(0.72 0.013 76);
+  --tm-faint: oklch(0.56 0.011 74);
+  --tm-on-accent: oklch(0.18 0.01 60);
+
+  --tm-accent: oklch(0.75 0.125 62);
+  --tm-accent-strong: oklch(0.8 0.12 64);
+  --tm-accent-text: oklch(0.79 0.115 64);
+  --tm-accent-soft: oklch(0.29 0.045 58);
+  --tm-accent-line: oklch(0.45 0.08 58);
+
+  --tm-me: oklch(0.72 0.095 256);
+  --tm-me-text: oklch(0.79 0.08 256);
+  --tm-me-soft: oklch(0.26 0.03 256);
+  --tm-me-line: oklch(0.42 0.06 256);
+  --tm-remote: oklch(0.73 0.08 168);
+  --tm-remote-text: oklch(0.8 0.07 168);
+  --tm-remote-soft: oklch(0.255 0.025 168);
+  --tm-remote-line: oklch(0.42 0.05 168);
+
+  --tm-rec: oklch(0.67 0.2 27);
+  --tm-rec-soft: oklch(0.28 0.06 27);
+  --tm-danger: oklch(0.7 0.16 27);
+  --tm-danger-soft: oklch(0.27 0.05 27);
+  --tm-warning: oklch(0.8 0.12 80);
+  --tm-warning-soft: oklch(0.28 0.045 80);
+  --tm-success: oklch(0.75 0.1 152);
+  --tm-success-soft: oklch(0.26 0.035 152);
+
+  --tm-focus: oklch(0.75 0.125 62 / 0.6);
+
+  --tm-shadow-1: 0 1px 0 oklch(0 0 0 / 0.25), 0 1px 2px oklch(0 0 0 / 0.3);
+  --tm-shadow-2: 0 1px 0 oklch(0 0 0 / 0.25), 0 6px 16px -4px oklch(0 0 0 / 0.45);
+  --tm-shadow-3: 0 0 0 1px oklch(1 0 0 / 0.04), 0 24px 56px -12px oklch(0 0 0 / 0.65),
+    0 8px 20px -8px oklch(0 0 0 / 0.5);
+  --tm-scrim: oklch(0.08 0.005 60 / 0.55);
+
+  --tm-skeleton: oklch(0.255 0.009 68);
+  --tm-skeleton-hi: oklch(0.3 0.01 68);
+}
+
+:root {
+  /* Type families. Bundled locally via @fontsource-variable. */
+  --tm-font-ui: "Inter Variable", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --tm-font-display: "Fraunces Variable", "Iowan Old Style", Georgia, serif;
+  --tm-font-mono: "JetBrains Mono Variable", "Cascadia Mono", ui-monospace, monospace;
+
+  /* Motion (mirrors src/lib/motion.ts). */
+  --tm-dur-micro: 140ms;
+  --tm-dur-panel: 220ms;
+  --tm-dur-view: 320ms;
+  --tm-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --tm-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --tm-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Layout. */
+  --tm-titlebar-h: 40px;
+  --tm-rail-w: 60px;
+  --tm-capturebar-h: 52px;
+}
