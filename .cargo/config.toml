@@ -1,3 +1,4 @@
 [env]
-# whisper-rs-sys: use the pre-generated FFI bindings instead of running bindgen (no libclang needed).
-WHISPER_DONT_GENERATE_BINDINGS = "1"
+# bindgen (whisper-rs-sys) needs libclang; whisper-rs-sys's pre-generated bindings are Linux-only
+# (struct layouts differ on Windows, where `long` is 4 bytes).
+LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'

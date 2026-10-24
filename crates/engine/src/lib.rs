@@ -3,12 +3,17 @@
 //! Nothing in this crate depends on Tauri or a UI. The app shell (`src-tauri`) owns an
 //! `Engine` and forwards its `EngineEvent`s to the webview.
 
+pub mod capture;
 pub mod clock;
 pub mod dsp;
 pub mod encode;
+pub mod engine;
+pub mod models;
 pub mod segmenter;
 pub mod storage;
+pub mod transcribe;
 pub mod types;
+pub mod vad;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
