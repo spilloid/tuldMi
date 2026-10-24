@@ -93,7 +93,12 @@ impl CatalogEntry {
             name: self.name.into(),
             description: self.description.into(),
             size_bytes: self.size_bytes,
-            languages: if self.multilingual { "Multilingual" } else { "English" }.into(),
+            languages: if self.multilingual {
+                "Multilingual"
+            } else {
+                "English"
+            }
+            .into(),
             license: LICENSE.into(),
             url: self.url(),
             installed,
@@ -103,3 +108,230 @@ impl CatalogEntry {
 }
 
 // `ModelManager` (download/cancel/delete/verify) is implemented in Unit 2; see module docs.
+
+use crate::{
+    Error, Result,
+    engine::EventSink,
+    storage::{InstalledModel, Store},
+    types::*,
+};
+use parking_lot::Mutex;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
+
+pub struct ModelManager {
+    store: Arc<Store>,
+    sink: Arc<dyn EventSink>,
+    downloads: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+}
+impl ModelManager {
+    pub fn new(store: Arc<Store>, sink: Arc<dyn EventSink>) -> Self {
+        Self {
+            store,
+            sink,
+            downloads: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+    pub fn list(&self) -> Result<Vec<ModelInfo>> {
+        let installed = self.store.installed_models()?;
+        Ok(CATALOG
+            .iter()
+            .map(|e| {
+                e.info(installed.iter().any(|m| {
+                    m.model_id == e.id
+                        && m.sha256 == e.sha256
+                        && m.bytes == e.size_bytes
+                        && std::fs::metadata(&m.path).is_ok_and(|file| file.len() == e.size_bytes)
+                }))
+            })
+            .collect())
+    }
+    pub fn download(&self, model_id: &str) -> Result<()> {
+        let entry = entry(model_id).ok_or_else(|| Error::Model("unknown model".into()))?;
+        if self.list()?.iter().any(|m| m.id == model_id && m.installed) {
+            return Ok(());
+        }
+        let mut downloads = self.downloads.lock();
+        if downloads.contains_key(model_id) {
+            return Ok(());
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        downloads.insert(model_id.into(), cancel.clone());
+        let store = self.store.clone();
+        let sink = self.sink.clone();
+        let active = self.downloads.clone();
+        let spawned = std::thread::Builder::new()
+            .name("tuldmi-download".into())
+            .spawn(move || {
+                let part = store
+                    .data_dir()
+                    .join("models")
+                    .join(format!("{}.part", entry.file));
+                let mut downloaded = 0;
+                let progress = |state, downloaded, error| {
+                    let event = EngineEvent::ModelProgress(ModelProgress {
+                        model_id: entry.id.into(),
+                        state,
+                        downloaded,
+                        total: entry.size_bytes,
+                        error,
+                    });
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sink.emit(event)))
+                        .is_err()
+                    {
+                        tracing::error!("model progress sink panicked");
+                    }
+                };
+                progress(DownloadState::Downloading, 0, None);
+                let result = download_file(entry, &part, &cancel, &mut downloaded, |n| {
+                    progress(DownloadState::Downloading, n, None)
+                })
+                .and_then(|hash| {
+                    if cancel.load(Ordering::Acquire) {
+                        return Err(Error::Model("download cancelled".into()));
+                    }
+                    progress(DownloadState::Verifying, downloaded, None);
+                    if hash != entry.sha256 || downloaded != entry.size_bytes {
+                        return Err(Error::Model("model checksum or size mismatch".into()));
+                    }
+                    let path = store.data_dir().join("models").join(entry.file);
+                    std::fs::rename(&part, &path)?;
+                    if let Err(error) = store.record_model(&InstalledModel {
+                        model_id: entry.id.into(),
+                        path: path.clone(),
+                        bytes: downloaded,
+                        sha256: hash,
+                    }) {
+                        let _ = std::fs::remove_file(path);
+                        return Err(error);
+                    }
+                    Ok(())
+                });
+                if result.is_err() {
+                    let _ = std::fs::remove_file(&part);
+                }
+                let cancelled = cancel.load(Ordering::Acquire);
+                active.lock().remove(entry.id);
+                match result {
+                    Ok(()) => progress(DownloadState::Done, downloaded, None),
+                    Err(_) if cancelled => progress(DownloadState::Cancelled, downloaded, None),
+                    Err(error) => {
+                        progress(DownloadState::Failed, downloaded, Some(error.to_string()))
+                    }
+                }
+            });
+        if let Err(error) = spawned {
+            downloads.remove(model_id);
+            return Err(error.into());
+        }
+        Ok(())
+    }
+    pub fn cancel(&self, model_id: &str) {
+        if let Some(flag) = self.downloads.lock().get(model_id) {
+            flag.store(true, Ordering::Release);
+        }
+    }
+    pub fn cancel_all(&self) {
+        for flag in self.downloads.lock().values() {
+            flag.store(true, Ordering::Release);
+        }
+    }
+    pub fn delete(&self, model_id: &str) -> Result<()> {
+        if entry(model_id).is_none() {
+            return Err(Error::Model("unknown model".into()));
+        }
+        let downloading = self.downloads.lock().contains_key(model_id);
+        if downloading {
+            self.cancel(model_id);
+            return Err(Error::Model(
+                "download cancelling; retry deletion when it finishes".into(),
+            ));
+        }
+        for model in self.store.installed_models()? {
+            if model.model_id == model_id {
+                match std::fs::remove_file(&model.path) {
+                    Ok(()) => (),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
+        self.store.remove_model(model_id)
+    }
+    /// Verify a file without installing it or performing network I/O.
+    pub fn verify(path: &Path, expected: &str) -> Result<bool> {
+        let mut file = std::fs::File::open(path)?;
+        let mut hash = Sha256::new();
+        let mut buffer = [0u8; 65536];
+        loop {
+            let n = file.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            hash.update(&buffer[..n]);
+        }
+        Ok(format!("{:x}", hash.finalize()) == expected)
+    }
+}
+impl Drop for ModelManager {
+    fn drop(&mut self) {
+        self.cancel_all();
+    }
+}
+fn download_file(
+    entry: &CatalogEntry,
+    part: &Path,
+    cancel: &AtomicBool,
+    downloaded: &mut u64,
+    mut progress: impl FnMut(u64),
+) -> Result<String> {
+    let parent = part
+        .parent()
+        .ok_or_else(|| Error::Model("missing models directory".into()))?;
+    std::fs::create_dir_all(parent)?;
+    if fs4::available_space(parent)? < entry.size_bytes + entry.size_bytes / 10 {
+        return Err(Error::Model("not enough free disk space for model".into()));
+    }
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(3600))
+        .build()
+        .map_err(|e| Error::Model(e.to_string()))?;
+    let mut response = client
+        .get(entry.url())
+        .send()
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| Error::Model(e.to_string()))?;
+    let mut file = std::fs::File::create(part)?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    let mut last = Instant::now();
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            return Err(Error::Model("download cancelled".into()));
+        }
+        let n = response.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        *downloaded += n as u64;
+        if *downloaded > entry.size_bytes {
+            return Err(Error::Model("model exceeds expected size".into()));
+        }
+        file.write_all(&buffer[..n])?;
+        hash.update(&buffer[..n]);
+        if last.elapsed() >= Duration::from_millis(100) {
+            progress(*downloaded);
+            last = Instant::now();
+        }
+    }
+    file.sync_all()?;
+    Ok(format!("{:x}", hash.finalize()))
+}
