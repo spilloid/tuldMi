@@ -29,6 +29,8 @@ export interface DemoOptions {
   empty?: boolean;
   /** Disable the scripted live arrivals (for deterministic screenshots). */
   still?: boolean;
+  /** Start paused. */
+  paused?: boolean;
   now?: number;
 }
 
@@ -61,7 +63,7 @@ export class DemoBackend implements Backend {
       ...DEFAULT_SETTINGS,
       onboardingComplete: !opts.fresh,
       modelId: opts.fresh ? null : DEMO_MODEL_ID,
-      retention: "days7",
+      retention: opts.fresh ? "days30" : "days7",
     };
     if (opts.fresh) this.models = this.models.map((m) => ({ ...m, installed: false }));
     const sessionId = this.events[this.events.length - 1]?.sessionId ?? "d3m0d3m0-0000-4000-8000-5e5510000001";
@@ -78,6 +80,9 @@ export class DemoBackend implements Backend {
       transcriber: opts.fresh ? "noModel" : "idle",
     };
     this.recomputeBacklog();
+    if (opts.paused && !opts.fresh) {
+      this.status = { ...this.status, state: "paused", sources: this.status.sources.map((s) => ({ ...s, state: "disabled" })) };
+    }
     if (!opts.fresh && !opts.still) this.startScript();
   }
 
@@ -338,7 +343,7 @@ export class DemoBackend implements Backend {
     window.close();
   }
 
-  audioUrl(_path: string) {
+  audioUrl(_path: string): string | null {
     return null;
   }
 

@@ -17,6 +17,8 @@ export default defineConfig({
     target: "es2022",
     outDir: "dist",
     sourcemap: false,
+    // Local desktop bundle (loaded from disk, not the network).
+    chunkSizeWarningLimit: 900,
   },
   test: {
     environment: "node",
