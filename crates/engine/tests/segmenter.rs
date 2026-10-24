@@ -221,3 +221,25 @@ fn post_roll_longer_than_min_silence_is_honored() {
     assert_eq!(h.out.len(), 1);
     assert!(approx(h.out[0].end_sample(), speech_end + ms_to_samples(1_000), FRAME));
 }
+
+/// Regression (2026-10-24 review): after a forced split, the remainder must contain new speech —
+/// never a tail that is only overlap + post-roll after speech already ended.
+#[test]
+fn no_silence_only_tail_after_forced_split() {
+    for (min_silence, post_roll) in [(700u32, 700u32), (1_500, 700), (300, 1_000)] {
+        let cfg = SegmenterConfig { max_segment_ms: 10_000, min_silence_ms: min_silence, post_roll_ms: post_roll, ..SegmenterConfig::default() };
+        for speech_ms in (8_960..=11_200).step_by(64) {
+            let mut h = Harness::new(cfg.clone());
+            h.run(320, 0.0);
+            h.run(speech_ms, 0.9);
+            let speech_end = h.pos;
+            h.run(4_000, 0.0);
+            for w in h.out.windows(2) {
+                assert!(w[1].end_sample() > w[0].end_sample(), "segment wholly inside its predecessor (speech {speech_ms} ms, cfg {min_silence}/{post_roll})");
+                assert!(w[1].start_sample < speech_end, "silence-only tail after speech ended (speech {speech_ms} ms, cfg {min_silence}/{post_roll}): {}..{} vs speech end {speech_end}", w[1].start_sample, w[1].end_sample());
+            }
+            let covered_to = h.out.iter().map(|s| s.end_sample()).max().unwrap_or(0);
+            assert!(covered_to >= speech_end, "speech end not covered");
+        }
+    }
+}

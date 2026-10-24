@@ -241,6 +241,26 @@ impl Store {
         Ok(events)
     }
 
+    /// Newest first, keyset-paginated on `(started_at, id)`: returns events strictly older than
+    /// `cursor` in that order, so events sharing a start time are never skipped between pages.
+    pub fn list_events_page(&self, cursor: Option<(i64, Uuid)>, limit: u32) -> Result<Vec<SpeechEvent>> {
+        let (at, id) = match cursor {
+            Some((at, id)) => (Some(at), Some(id.to_string())),
+            None => (None, None),
+        };
+        let mut connection = self.connection.lock();
+        let tx = connection.transaction()?;
+        let events = read::events(
+            &tx,
+            &self.data_dir,
+            "WHERE (?1 IS NULL OR e.started_at < ?1 OR (e.started_at = ?1 AND e.id < ?2)) \
+             ORDER BY e.started_at DESC, e.id DESC LIMIT ?3",
+            params![at, id, limit],
+        )?;
+        tx.commit()?;
+        Ok(events)
+    }
+
     /// Replace the event's segments; status becomes `done`, or `empty` if every segment's text
     /// is blank (or there are none). Marks the job done. Returns the updated event.
     pub fn save_transcript(

@@ -269,3 +269,83 @@ fn models_are_recorded() {
     s.remove_model("whisper-base.en").unwrap();
     assert!(s.installed_models().unwrap().is_empty());
 }
+
+// --- regressions from the 2026-10-24 adversarial review (docs/dev-process.md, unit 1) ---
+
+#[test]
+fn recovery_caps_attempts_so_a_crashing_job_cannot_loop_forever() {
+    let (dir, s) = store();
+    let sess = s.start_session(0).unwrap();
+    let e = event(&s, dir.path(), &sess, Source::Mic, 1_000);
+    for _ in 0..MAX_ATTEMPTS {
+        assert!(s.next_job().unwrap().is_some());
+        s.recover_interrupted_jobs().unwrap(); // the app "crashed" mid-transcription
+    }
+    let ev = s.get_event(e.id).unwrap().unwrap();
+    assert_eq!(ev.status, EventStatus::Failed, "a job interrupted MAX_ATTEMPTS times must stop being retried automatically");
+    assert!(ev.error.unwrap_or_default().to_lowercase().contains("interrupted"));
+    assert!(s.next_job().unwrap().is_none());
+    assert!(s.retry_event(e.id).unwrap(), "the user can still retry it");
+}
+
+#[test]
+fn retention_never_expires_audio_without_a_successful_transcript() {
+    let (dir, s) = store();
+    let sess = s.start_session(0).unwrap();
+    let failed = event(&s, dir.path(), &sess, Source::Mic, 1_000);
+    s.next_job().unwrap().unwrap();
+    s.fail_job(failed.id, "decoder error", false).unwrap();
+    assert_eq!(s.get_event(failed.id).unwrap().unwrap().status, EventStatus::Failed);
+    assert!(s.expire_audio_before(i64::MAX).unwrap().is_empty(), "failed events keep their audio so they can be retried");
+    assert!(s.retry_event(failed.id).unwrap());
+}
+
+#[test]
+fn search_handles_punctuation_inside_words() {
+    let (dir, s) = store();
+    let sess = s.start_session(0).unwrap();
+    let a = event(&s, dir.path(), &sess, Source::Mic, 1_000);
+    transcribe(&s, a.id, "Let's do a follow-up on the e-mail about version 3.5 in the U.S. office.");
+    for q in ["follow-up", "e-mail", "3.5", "U.S.", "let's", "Let’s", "follow-up e-mail", "version 3.5"] {
+        let hits = s.search(&SearchQuery { text: q.into(), ..Default::default() }).unwrap();
+        assert_eq!(hits.len(), 1, "query {q:?} should match");
+    }
+}
+
+#[test]
+fn paging_with_a_cursor_does_not_skip_equal_timestamps() {
+    let (dir, s) = store();
+    let sess = s.start_session(0).unwrap();
+    let a = s.insert_event(&NewEvent { session_id: sess.id, source: Source::Mic, started_at: 5_000, ended_at: 6_000, audio: Some(audio_file(dir.path(), "a.ogg")) }).unwrap();
+    let b = s.insert_event(&NewEvent { session_id: sess.id, source: Source::System, started_at: 5_000, ended_at: 6_000, audio: Some(audio_file(dir.path(), "b.ogg")) }).unwrap();
+    let first = s.list_events_page(None, 1).unwrap();
+    assert_eq!(first.len(), 1);
+    let cursor = (first[0].started_at, first[0].id);
+    let second = s.list_events_page(Some(cursor), 1).unwrap();
+    assert_eq!(second.len(), 1);
+    let mut ids = vec![first[0].id, second[0].id];
+    ids.sort();
+    let mut want = vec![a.id, b.id];
+    want.sort();
+    assert_eq!(ids, want);
+    assert!(s.list_events_page(Some((second[0].started_at, second[0].id)), 1).unwrap().is_empty());
+}
+
+#[test]
+fn deleted_transcripts_do_not_linger_in_database_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let phrase = "zanzibar-quokka-secret";
+    {
+        let s = Store::open(dir.path()).unwrap();
+        let sess = s.start_session(0).unwrap();
+        let e = event(&s, dir.path(), &sess, Source::Mic, 1_000);
+        transcribe(&s, e.id, &format!("the password is {phrase} okay"));
+        s.delete_all_history().unwrap();
+    }
+    for name in ["tuldmi.db", "tuldmi.db-wal"] {
+        let p = dir.path().join(name);
+        if let Ok(bytes) = fs::read(&p) {
+            assert!(!bytes.windows(phrase.len()).any(|w| w == phrase.as_bytes()), "deleted text still present in {name}");
+        }
+    }
+}
