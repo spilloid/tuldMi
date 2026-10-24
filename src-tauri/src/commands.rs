@@ -73,8 +73,15 @@ pub async fn update_settings(app: AppHandle, state: State<'_, AppState>, setting
 }
 
 #[tauri::command]
-pub async fn list_events(state: State<'_, AppState>, before: Option<i64>, limit: u32) -> Res<Vec<SpeechEvent>> {
-    state.engine.list_events(before, limit.clamp(1, 500)).map_err(err)
+pub async fn list_events(state: State<'_, AppState>, before: Option<i64>, before_id: Option<String>, limit: u32) -> Res<Vec<SpeechEvent>> {
+    let cursor = match (before, before_id) {
+        (Some(at), Some(id)) => Some((at, self::id(&id)?)),
+        // A timestamp alone means "older than this instant"; the nil UUID sorts first, so
+        // every event at exactly `at` is excluded and nothing before it is skipped.
+        (Some(at), None) => Some((at, Uuid::nil())),
+        _ => None,
+    };
+    state.engine.store().list_events_page(cursor, limit.clamp(1, 500)).map_err(err)
 }
 
 #[tauri::command]

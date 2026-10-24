@@ -14,7 +14,7 @@ returns `Result<T, String>`; the error string is user-presentable.
 | `list_devices` | — | `DeviceInfo[]` | Inputs and loopback-capable outputs. |
 | `get_settings` | — | `Settings` | |
 | `update_settings` | `settings: Settings` | `Settings` | Whole object. Engine re-opens devices if sources changed; registers new shortcut; applies autostart. |
-| `list_events` | `before?: number, limit: number` | `SpeechEvent[]` | Newest first. |
+| `list_events` | `before?: number, beforeId?: string, limit: number` | `SpeechEvent[]` | Newest first, keyset cursor on `(startedAt, id)` of the last event of the previous page, so equal start times are never skipped. |
 | `get_event` | `id: string` | `SpeechEvent \| null` | |
 | `search` | `query: SearchQuery` | `SearchHit[]` | Snippet highlights are `\u0002`…`\u0003`. Never render as HTML. |
 | `retry_event` | `id: string` | `boolean` | |
