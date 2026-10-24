@@ -8,7 +8,10 @@
 //! explicit user action calls it. Streams to `models/<file>.part`, checks free disk space first
 //! (size + 10% headroom), emits throttled (<= 10/s) `ModelProgress`, supports cancel, verifies
 //! SHA-256, renames atomically, records the installation in the store. Never re-downloads an
-//! installed, verified file.
+//! installed, verified file. Network reads run on a separate fetch thread: a connection that
+//! delivers no bytes for `DOWNLOAD_IDLE_TIMEOUT` fails (the user can retry), and cancel takes
+//! effect within ~250 ms even during a blocked read. Shutdown cancels and briefly joins
+//! downloads; a `.part` stranded anyway is swept at the next engine start.
 
 use crate::types::ModelInfo;
 
@@ -126,10 +129,16 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+/// A download fails when no bytes arrive for this long (the user can retry).
+pub const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How often a download notices cancellation, even while the network read is blocked.
+const CANCEL_POLL: Duration = Duration::from_millis(250);
+
 pub struct ModelManager {
     store: Arc<Store>,
     sink: Arc<dyn EventSink>,
     downloads: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 impl ModelManager {
     pub fn new(store: Arc<Store>, sink: Arc<dyn EventSink>) -> Self {
@@ -137,6 +146,26 @@ impl ModelManager {
             store,
             sink,
             downloads: Arc::new(Mutex::new(HashMap::new())),
+            threads: Mutex::new(Vec::new()),
+        }
+    }
+    /// Cancel every download and wait up to `timeout` for their threads, which remove their
+    /// `.part` files. Threads still running after that are left to finish on their own.
+    pub fn shutdown(&self, timeout: Duration) {
+        self.cancel_all();
+        let deadline = Instant::now() + timeout;
+        let mut threads = self.threads.lock();
+        while threads.iter().any(|t| !t.is_finished()) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        for thread in threads.drain(..) {
+            if thread.is_finished() {
+                if thread.join().is_err() {
+                    tracing::error!("model download worker failed");
+                }
+            } else {
+                tracing::warn!("model download still stopping; its partial file is swept on next start");
+            }
         }
     }
     pub fn list(&self) -> Result<Vec<ModelInfo>> {
@@ -227,9 +256,16 @@ impl ModelManager {
                     }
                 }
             });
-        if let Err(error) = spawned {
-            downloads.remove(model_id);
-            return Err(error.into());
+        match spawned {
+            Ok(thread) => {
+                let mut threads = self.threads.lock();
+                threads.retain(|t| !t.is_finished());
+                threads.push(thread);
+            }
+            Err(error) => {
+                downloads.remove(model_id);
+                return Err(error.into());
+            }
         }
         Ok(())
     }
@@ -299,34 +335,35 @@ fn download_file(
     if fs4::available_space(parent)? < entry.size_bytes + entry.size_bytes / 10 {
         return Err(Error::Model("not enough free disk space for model".into()));
     }
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(3600))
-        .build()
-        .map_err(|e| Error::Model(e.to_string()))?;
-    let mut response = client
-        .get(entry.url())
-        .send()
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| Error::Model(e.to_string()))?;
+    // Network I/O runs on a fetch thread so cancellation is noticed within `CANCEL_POLL` even
+    // while a read is blocked. Only this thread touches the `.part` file.
+    let (chunks, fetched) = crossbeam_channel::bounded(16);
+    let url = entry.url();
+    std::thread::Builder::new()
+        .name("tuldmi-fetch".into())
+        .spawn(move || fetch(&url, &chunks))?;
     let mut file = std::fs::File::create(part)?;
     let mut hash = Sha256::new();
-    let mut buffer = [0u8; 65536];
     let mut last = Instant::now();
     loop {
         if cancel.load(Ordering::Acquire) {
             return Err(Error::Model("download cancelled".into()));
         }
-        let n = response.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        *downloaded += n as u64;
+        let bytes = match fetched.recv_timeout(CANCEL_POLL) {
+            Ok(Fetched::Chunk(bytes)) => bytes,
+            Ok(Fetched::End) => break,
+            Ok(Fetched::Failed(error)) => return Err(error),
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                return Err(Error::Model("download stopped unexpectedly".into()));
+            }
+        };
+        *downloaded += bytes.len() as u64;
         if *downloaded > entry.size_bytes {
             return Err(Error::Model("model exceeds expected size".into()));
         }
-        file.write_all(&buffer[..n])?;
-        hash.update(&buffer[..n]);
+        file.write_all(&bytes)?;
+        hash.update(&bytes);
         if last.elapsed() >= Duration::from_millis(100) {
             progress(*downloaded);
             last = Instant::now();
@@ -334,4 +371,44 @@ fn download_file(
     }
     file.sync_all()?;
     Ok(format!("{:x}", hash.finalize()))
+}
+
+enum Fetched {
+    Chunk(Vec<u8>),
+    End,
+    Failed(Error),
+}
+
+/// Stream `url` into `chunks`. The blocking client applies its timeout to the request and to
+/// each body read, so a connection that delivers nothing for `DOWNLOAD_IDLE_TIMEOUT` fails.
+/// Exits as soon as the receiver is gone (cancelled or failed download).
+fn fetch(url: &str, chunks: &crossbeam_channel::Sender<Fetched>) {
+    let result = (|| -> Result<()> {
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(DOWNLOAD_IDLE_TIMEOUT)
+            .build()
+            .map_err(|e| Error::Model(e.to_string()))?;
+        let mut response = client
+            .get(url)
+            .send()
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| Error::Model(e.to_string()))?;
+        let mut buffer = vec![0u8; 65536];
+        loop {
+            let n = response.read(&mut buffer).map_err(|e| {
+                Error::Model(format!("download stalled or interrupted; try again ({e})"))
+            })?;
+            if n == 0 {
+                let _ = chunks.send(Fetched::End);
+                return Ok(());
+            }
+            if chunks.send(Fetched::Chunk(buffer[..n].to_vec())).is_err() {
+                return Ok(());
+            }
+        }
+    })();
+    if let Err(error) = result {
+        let _ = chunks.send(Fetched::Failed(error));
+    }
 }

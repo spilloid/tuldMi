@@ -69,6 +69,12 @@ impl StreamClock {
         self.wall.to_unix_ms(self.instant_of(sample))
     }
 
+    /// Explicitly place `sample` at `at` (a stream resuming after the device sent nothing).
+    pub fn rebase(&mut self, sample: u64, at: Instant) {
+        self.base_instant = at;
+        self.base_sample = sample;
+    }
+
     /// Called when a buffer ending at `end_sample` arrives at `now`. Re-bases if drift exceeds
     /// `MAX_DRIFT_MS`. Returns the drift that was observed, in ms (positive = samples late).
     pub fn observe(&mut self, end_sample: u64, now: Instant) -> i64 {

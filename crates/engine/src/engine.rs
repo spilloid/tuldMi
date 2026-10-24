@@ -17,19 +17,29 @@
 //!   upserts and status (backlog/transcriber state). Parks on a condvar/channel when idle or
 //!   when no model is installed; failures go through `fail_job` (model-missing = not retryable
 //!   until the user installs a model, then queued jobs proceed).
-//! - `tuldmi-house`: at start and every 10 minutes: retention (`expire_audio_before`), unlink
-//!   returned files, orphan sweep at start; every 3 s: reopen `Unavailable` sources and follow
-//!   default-device changes for unpinned sources.
+//! - `tuldmi-house`: at start, every 10 minutes, and on request after a retention settings
+//!   change: retention (`expire_audio_events_before`, one bounded SQL update; upserts only for
+//!   events whose audio expired), unlink returned files, orphan sweep at start; every 3 s:
+//!   reopen `Unavailable` sources and follow default-device changes for unpinned sources.
+//! - `tuldmi-events` (`dispatch`): the only thread that calls the `EventSink`. Every other
+//!   thread (and model downloads) enqueue into a bounded queue and never block on the sink.
 //!
-//! State machine: Stopped -> (start/resume) Starting -> Recording; Recording -> (pause) Paused;
-//! any -> Error when every enabled source fails (still retrying). A session row spans one
-//! Recording run (resume starts a new session). Pause and shutdown flush segmenters first, so
+//! Partial model downloads (`models/*.part`) are swept at start, when no download can be active.
+//!
+//! State machine: Stopped -> (start/resume) Starting -> Recording; Recording -> (pause) Paused.
+//! While a session runs, the state is Recording only if some enabled source has a live stream;
+//! otherwise it is Error: every enabled source failed (each shows `Unavailable` with its error;
+//! housekeeping keeps retrying, and a device notice is emitted only when a source's state or
+//! error changes), or no source is enabled at all (each shows `enabled: false`). A session row
+//! spans one run (resume starts a new session). Pause and shutdown flush segmenters first, so
 //! in-progress speech is kept. Monitoring opens devices and emits levels with *no* segmenting or
 //! storage, and is only allowed while not recording.
 //!
-//! Shutdown: stop streams, flush and persist in-progress segments, end session, signal threads,
-//! join with a timeout (an in-flight transcription is abandoned and recovered as `queued` on
-//! next start).
+//! Shutdown: cancel downloads, stop streams, flush and persist in-progress segments, end
+//! session, signal threads, join with a timeout (an in-flight transcription is abandoned and
+//! recovered as `queued` on next start), join cancelled downloads briefly, then give the event
+//! dispatcher a short grace and abandon it if the sink is stuck. Persisting never depends on
+//! the sink.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -65,6 +75,7 @@ pub enum ExportFormat {
 
 #[path = "runtime.rs"]
 mod runtime;
+use crate::dispatch::Dispatcher;
 use crate::{Error, models::ModelManager};
 use crossbeam_channel::{Sender, bounded};
 use parking_lot::Mutex;
@@ -75,10 +86,32 @@ use std::time::{Duration, Instant};
 pub struct Engine {
     shared: Arc<Shared>,
     commands: Sender<Command>,
+    /// Requests for an immediate retention sweep on `tuldmi-house` (reply when done).
+    retention: Sender<Sender<()>>,
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    events: Dispatcher,
+    events_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
     models: ModelManager,
     transitions: Mutex<()>,
     stopped: AtomicBool,
+}
+/// How long `shutdown` waits for a stuck event sink before abandoning undelivered events.
+const DISPATCH_GRACE: Duration = Duration::from_millis(250);
+
+/// No download can be active before the engine starts: any `.part` is a stranded partial.
+fn sweep_partial_downloads(models_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(models_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "part")
+            && path.is_file()
+            && let Err(error) = unlink(&path)
+        {
+            tracing::warn!(%error, "could not remove a stale partial model download");
+        }
+    }
 }
 impl Engine {
     pub fn start(config: EngineConfig, sink: Arc<dyn EventSink>) -> Result<Engine> {
@@ -94,6 +127,7 @@ impl Engine {
         provider: Arc<dyn AudioCaptureProvider>,
     ) -> Result<Engine> {
         let store = Arc::new(Store::open(&config.data_dir)?);
+        sweep_partial_downloads(&store.data_dir().join("models"));
         store.recover_interrupted_jobs()?;
         store.close_dangling_sessions()?;
         recover_audio_names(&store)?;
@@ -106,19 +140,26 @@ impl Engine {
             && !config.suppress_autostart;
         let (commands, receive) = bounded(32);
         let (wake, waking) = bounded(1);
-        let shared = Arc::new(Shared::new(
-            config,
-            store.clone(),
-            sink.clone(),
-            provider,
-            settings,
-            wake,
-        )?);
+        let (retention, retaining) = bounded(4);
+        // Engine threads emit only into the dispatcher; it alone calls the shell's sink.
+        let (events, events_thread) = Dispatcher::start(sink)?;
+        let sink: Arc<dyn EventSink> = Arc::new(events.clone());
+        let shared = match Shared::new(config, store.clone(), sink.clone(), provider, settings, wake)
+        {
+            Ok(shared) => Arc::new(shared),
+            Err(error) => {
+                events.finish(events_thread, DISPATCH_GRACE);
+                return Err(error);
+            }
+        };
         let models = ModelManager::new(store, sink);
         let mut engine = Self {
             shared: shared.clone(),
             commands: commands.clone(),
+            retention,
             threads: Mutex::new(Vec::new()),
+            events,
+            events_thread: Mutex::new(Some(events_thread)),
             models,
             transitions: Mutex::new(()),
             stopped: AtomicBool::new(false),
@@ -135,7 +176,7 @@ impl Engine {
                 transcription(s, waking)
             }),
             spawn("tuldmi-house", shared.clone(), move |s| {
-                housekeeping(s, commands)
+                housekeeping(s, commands, retaining)
             }),
         ];
         for result in starts {
@@ -197,9 +238,23 @@ impl Engine {
         {
             return Err(Error::Other("invalid VAD settings".into()));
         }
+        let previous_retention = self.shared.settings.lock().retention;
         self.shared.store.save_settings(&settings)?;
         self.request(|reply| Command::Settings(settings.clone(), reply))?;
         let _ = self.shared.wake.try_send(());
+        if previous_retention != settings.retention {
+            // The sweep runs on the housekeeping thread (bounded SQL, never the capture path).
+            // Wait briefly so the caller sees the new policy applied; on timeout it finishes
+            // in the background.
+            let (reply, done) = bounded(1);
+            if self
+                .retention
+                .send_timeout(reply, Duration::from_millis(100))
+                .is_ok()
+            {
+                let _ = done.recv_timeout(Duration::from_secs(5));
+            }
+        }
         Ok(settings)
     }
     pub fn store(&self) -> Arc<Store> {
@@ -379,7 +434,8 @@ impl Engine {
         if self.stopped.swap(true, Ordering::AcqRel) {
             return;
         }
-        let deadline = Instant::now() + Duration::from_millis(2800);
+        // Worker budget; downloads and the event dispatcher get short grace periods after it.
+        let deadline = Instant::now() + Duration::from_millis(2600);
         self.models.cancel_all();
         self.shared.cancel_asr.store(true, Ordering::Release);
         let (reply, done) = bounded(1);
@@ -403,6 +459,16 @@ impl Engine {
                     "worker is finishing in the background; unfinished jobs recover on restart",
                 );
             }
+        }
+        drop(threads);
+        // Cancelled downloads notice within ~250 ms and remove their `.part`.
+        self.models.shutdown(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .clamp(Duration::from_millis(100), Duration::from_secs(1)),
+        );
+        if let Some(thread) = self.events_thread.lock().take() {
+            self.events.finish(thread, DISPATCH_GRACE);
         }
     }
 }

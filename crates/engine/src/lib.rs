@@ -5,6 +5,7 @@
 
 pub mod capture;
 pub mod clock;
+pub(crate) mod dispatch;
 pub mod dsp;
 pub mod encode;
 pub mod engine;
