@@ -1,4 +1,4 @@
-//! Filesystem work stays outside the database mutex.
+//! Stored path validation and orphan discovery without deleting files.
 
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
@@ -55,6 +55,30 @@ pub(super) fn relative(root: &Path, path: &Path) -> Result<String> {
     Ok(components.join("/"))
 }
 
+/// Validate untrusted DB paths, including containment after resolving existing symlinks.
+pub(super) fn stored(root: &Path, relative: &str) -> Option<PathBuf> {
+    let path = Path::new(relative);
+    let valid = !relative.is_empty()
+        && !relative.contains('\0')
+        && path
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+        && std::fs::canonicalize(root)
+            .ok()
+            .and_then(|canonical_root| {
+                resolve(&root.join(path)).ok().map(|resolved| {
+                    resolved != canonical_root && resolved.starts_with(canonical_root)
+                })
+            })
+            .unwrap_or(false);
+    if valid {
+        Some(root.join(path))
+    } else {
+        tracing::warn!("invalid stored file path; treating as missing");
+        None
+    }
+}
+
 pub(super) fn orphans(root: &Path, live: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
     let live: HashSet<PathBuf> = live.into_iter().collect();
     let audio = root.join("audio");
@@ -65,6 +89,7 @@ pub(super) fn orphans(root: &Path, live: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error.into()),
     }
+    let quarantine = audio.join("orphans");
     let mut pending = vec![audio];
     let mut orphans = Vec::new();
     while let Some(directory) = pending.pop() {
@@ -72,6 +97,9 @@ pub(super) fn orphans(root: &Path, live: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
             let entry = entry?;
             let kind = entry.file_type()?;
             let path = entry.path();
+            if path == quarantine {
+                continue;
+            }
             if kind.is_dir() {
                 pending.push(path);
             } else if kind.is_file() && !live.contains(&path) {

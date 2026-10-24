@@ -15,7 +15,9 @@
 //! - If a region reaches `max_segment_ms`, it is split: the cut point is the lowest-probability
 //!   frame within the last `SPLIT_SEARCH_MS` of the segment; the segment ends there (reason
 //!   `MaxDuration`) and the next segment begins `SPLIT_OVERLAP_MS` before the cut, so a word
-//!   straddling the cut is present in both. Speech continues uninterrupted across the split.
+//!   straddling the cut is present in both. A continuation must contain speech after the
+//!   previous cut; its speech count includes only retained frames. Qualified utterances keep
+//!   short speech continuations. If speech ended and post-roll fits the cap, end with `Silence`.
 //! - While idle, only `HISTORY_MS` of audio is retained (for pre-roll). Memory is bounded by
 //!   `max_segment_ms + HISTORY_MS` at all times.
 //! - `flush()` (pause/stop/device loss) emits any in-progress region (reason `Flush`) if it
@@ -107,8 +109,10 @@ struct Frame {
 struct Region {
     start: u64,
     last_speech_end: u64,
-    // Keep qualification across forced splits, including a short final continuation.
+    // Count only speech actually retained in this region, including split overlap.
     speech_samples: u64,
+    // A qualified utterance may have a short final continuation after a forced split.
+    qualified: bool,
 }
 
 fn samples(ms: u32) -> u64 {
@@ -164,6 +168,7 @@ impl Segmenter {
                     .max(self.emitted_end),
                 last_speech_end: self.position,
                 speech_samples: 0,
+                qualified: false,
             });
         }
         let speech = self.region.is_some() && prob >= self.config.threshold - HYSTERESIS;
@@ -193,11 +198,26 @@ impl Segmenter {
                 break;
             }
             let limit = region.start.saturating_add(max_len);
+            // Speech can end before the cap while the silence detector is still waiting.
+            // Prefer its natural post-roll endpoint over splitting in trailing silence.
+            if !speech
+                && region
+                    .last_speech_end
+                    .saturating_add(samples(self.config.post_roll_ms))
+                    <= limit
+            {
+                if let Some(segment) = self.finish(EndReason::Silence) {
+                    self.emitted_end = segment.end_sample();
+                    out.push(segment);
+                }
+                break;
+            }
             // Short caps need proportionately shorter overlap to guarantee forward progress.
             let overlap = samples(SPLIT_OVERLAP_MS).min(max_len / 4);
             let earliest = limit
                 .saturating_sub(samples(SPLIT_SEARCH_MS))
-                .max(region.start.saturating_add(overlap).saturating_add(1));
+                .max(region.start.saturating_add(overlap).saturating_add(1))
+                .max(self.emitted_end.saturating_add(1));
             let mut cut = limit;
             let mut lowest = f32::INFINITY;
             for info in &self.frames {
@@ -210,9 +230,18 @@ impl Segmenter {
             if let Some(segment) = self.segment(cut, EndReason::MaxDuration) {
                 self.emitted_end = cut;
                 out.push(segment);
+                if let Some(region) = &mut self.region {
+                    region.qualified = true;
+                }
             }
             if let Some(region) = &mut self.region {
                 region.start = cut.saturating_sub(overlap).max(region.start + 1);
+                region.speech_samples = self
+                    .frames
+                    .iter()
+                    .filter(|frame| frame.speech)
+                    .map(|frame| frame.end.saturating_sub(frame.start.max(region.start)))
+                    .sum();
                 let keep_from = region.start;
                 self.discard_before(keep_from);
             }
@@ -279,7 +308,11 @@ impl Segmenter {
 
     fn segment(&self, end: u64, reason: EndReason) -> Option<SpeechSegment> {
         let region = self.region.as_ref()?;
-        if region.speech_samples < samples(self.config.min_speech_ms) || end <= region.start {
+        if (!region.qualified && region.speech_samples < samples(self.config.min_speech_ms))
+            || end <= region.start
+            || end <= self.emitted_end
+            || region.last_speech_end <= self.emitted_end
+        {
             return None;
         }
         let start = region.start.max(self.buffer_start);
@@ -289,12 +322,17 @@ impl Segmenter {
         }
         let mut weight = 0u64;
         let mut probability = 0.0f64;
+        let mut new_speech = false;
         for frame in &self.frames {
             if frame.speech {
                 let n = frame.end.min(end).saturating_sub(frame.start.max(start));
                 weight += n;
                 probability += f64::from(frame.prob) * n as f64;
+                new_speech |= frame.end.min(end) > frame.start.max(start).max(self.emitted_end);
             }
+        }
+        if !new_speech {
+            return None;
         }
         Some(SpeechSegment {
             start_sample: start,

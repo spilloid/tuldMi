@@ -1,8 +1,13 @@
 //! SQLite persistence: sessions, speech events, transcripts (FTS5), jobs, settings, models.
 //!
-//! One connection behind a mutex, with WAL and short transactions. Audio paths are relative
-//! on disk and absolute in the API. Deletion commits before the caller unlinks returned paths;
-//! a crash in between leaves an orphan that `orphan_audio_files` can recover.
+//! Use one Store per process: a single connection behind a mutex, WAL, FULL synchronous
+//! commits, secure deletion, and short transactions. Stored paths are relative to data_dir;
+//! readers validate containment before returning absolute paths. Invalid paths are missing
+//! audio and produce a warning without logging content.
+//! The store never unlinks managed files itself. Deletion/retention commits before returning
+//! paths for the caller to unlink; a crash between these steps leaves recoverable orphans.
+//! Orphan discovery skips audio/orphans, where the engine can quarantine files. Retention
+//! expires only successfully transcribed audio; deleting all history also scrubs SQLite files.
 
 use std::path::{Path, PathBuf};
 
@@ -20,7 +25,7 @@ mod search;
 #[cfg(test)]
 mod tests;
 
-pub const LATEST_SCHEMA: u32 = 1;
+pub const LATEST_SCHEMA: u32 = 2;
 /// Automatic retries for a transcription job before it is marked failed.
 pub const MAX_ATTEMPTS: u32 = 3;
 pub const DEFAULT_SEARCH_LIMIT: u32 = 50;
@@ -86,10 +91,15 @@ impl Store {
         let mut connection = Connection::open(data_dir.join("tuldmi.db"))?;
         connection.busy_timeout(std::time::Duration::from_millis(5_000))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
-        connection.pragma_update(None, "synchronous", "NORMAL")?;
+        connection.pragma_update(None, "synchronous", "FULL")?;
+        connection.pragma_update(None, "secure_delete", "ON")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
+        connection.pragma_update(None, "temp_store", "MEMORY")?;
 
-        const MIGRATIONS: &[&str] = &[include_str!("migrations/0001_initial.sql")];
+        const MIGRATIONS: &[&str] = &[
+            include_str!("migrations/0001_initial.sql"),
+            include_str!("migrations/0002_asset_index.sql"),
+        ];
         for (index, migration) in MIGRATIONS.iter().enumerate() {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let version: u32 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -114,6 +124,7 @@ impl Store {
             )?;
         }
         tx.commit()?;
+        search::init_tokenizer(&connection)?;
         Ok(Store {
             data_dir,
             connection: Mutex::new(connection),
@@ -243,7 +254,11 @@ impl Store {
 
     /// Newest first, keyset-paginated on `(started_at, id)`: returns events strictly older than
     /// `cursor` in that order, so events sharing a start time are never skipped between pages.
-    pub fn list_events_page(&self, cursor: Option<(i64, Uuid)>, limit: u32) -> Result<Vec<SpeechEvent>> {
+    pub fn list_events_page(
+        &self,
+        cursor: Option<(i64, Uuid)>,
+        limit: u32,
+    ) -> Result<Vec<SpeechEvent>> {
         let (at, id) = match cursor {
             Some((at, id)) => (Some(at), Some(id.to_string())),
             None => (None, None),
@@ -408,6 +423,7 @@ impl Store {
             [&id],
             |row| row.get(0),
         )?;
+        let eligible = eligible && read::live_path(&tx, &self.data_dir, event_id)?.is_some();
         if eligible {
             tx.execute(
                 "INSERT INTO transcription_jobs (event_id, state, attempts, enqueued_at, updated_at)
@@ -425,17 +441,30 @@ impl Store {
         Ok(eligible)
     }
 
-    /// Startup recovery: running jobs -> queued, transcribing events -> queued.
+    /// Startup recovery: requeue interrupted jobs below MAX_ATTEMPTS; otherwise fail the
+    /// job and event. Returns the number of interrupted jobs recovered (including failures).
     pub fn recover_interrupted_jobs(&self) -> Result<u32> {
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let count = tx.execute(
-            "UPDATE transcription_jobs SET state = 'queued', updated_at = ?1 WHERE state = 'running'",
-            [now_ms()],
-        )?;
         tx.execute(
-            "UPDATE audio_events SET status = 'queued' WHERE status = 'transcribing'",
-            [],
+            "UPDATE audio_events SET
+             status = CASE WHEN (SELECT attempts FROM transcription_jobs WHERE event_id = audio_events.id)
+                 >= ?1 THEN 'failed' ELSE 'queued' END,
+             error = CASE WHEN (SELECT attempts FROM transcription_jobs WHERE event_id = audio_events.id)
+                 >= ?1 THEN ?2 ELSE NULL END
+             WHERE id IN (SELECT event_id FROM transcription_jobs WHERE state = 'running')",
+            params![MAX_ATTEMPTS, "Transcription was interrupted repeatedly"],
+        )?;
+        let count = tx.execute(
+            "UPDATE transcription_jobs SET
+             state = CASE WHEN attempts >= ?1 THEN 'failed' ELSE 'queued' END,
+             last_error = CASE WHEN attempts >= ?1 THEN ?2 ELSE NULL END,
+             updated_at = ?3 WHERE state = 'running'",
+            params![
+                MAX_ATTEMPTS,
+                "Transcription was interrupted repeatedly",
+                now_ms()
+            ],
         )?;
         tx.commit()?;
         Ok(count as u32)
@@ -460,9 +489,9 @@ impl Store {
     }
 
     // --- retention / deletion ---------------------------------------------------------------
-    /// Expire audio of events that ended before `cutoff` and are finished (`done`, `empty`, or
-    /// `failed`). Queued/transcribing audio is never expired. Transcripts are kept. Returns
-    /// absolute paths to unlink.
+    /// Expire audio of events that ended before `cutoff` with a successful transcript
+    /// (`done` or `empty`). Failed, queued, and transcribing events keep their audio for
+    /// retry. Transcripts are kept. Returns validated absolute paths to unlink.
     pub fn expire_audio_before(&self, cutoff: i64) -> Result<Vec<PathBuf>> {
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -471,7 +500,7 @@ impl Store {
                 "UPDATE audio_assets SET rel_path = NULL, expired_at = ?2 WHERE id IN (
                  SELECT a.id FROM audio_assets a JOIN audio_events e ON e.asset_id = a.id
                  WHERE a.rel_path IS NOT NULL AND a.expired_at IS NULL AND e.ended_at < ?1
-                 AND e.status IN ('done', 'empty', 'failed'))",
+                 AND e.status IN ('done', 'empty'))",
             )?;
             // Capture paths before clearing the references in the same transaction.
             let paths = read::paths(
@@ -479,7 +508,7 @@ impl Store {
                 &self.data_dir,
                 "SELECT a.rel_path FROM audio_assets a JOIN audio_events e ON e.asset_id = a.id
                  WHERE a.rel_path IS NOT NULL AND a.expired_at IS NULL AND e.ended_at < ?1
-                 AND e.status IN ('done', 'empty', 'failed')",
+                 AND e.status IN ('done', 'empty')",
                 [cutoff],
             )?;
             statement.execute(params![cutoff, now_ms()])?;
@@ -519,10 +548,18 @@ impl Store {
         tx.execute("DELETE FROM audio_assets", [])?;
         tx.execute("DELETE FROM sessions", [])?;
         tx.commit()?;
+        connection.execute_batch(
+            "INSERT INTO transcript_fts(transcript_fts) VALUES ('optimize');
+             PRAGMA wal_checkpoint(TRUNCATE);
+             VACUUM;",
+        )?;
+        // VACUUM itself writes to the WAL; truncate that final copy as well.
+        connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(paths)
     }
 
-    /// Audio files under `data_dir/audio` that no live asset references.
+    /// Audio files under `data_dir/audio` that no live asset references, excluding
+    /// the `audio/orphans` quarantine. Returns paths without moving or deleting files.
     pub fn orphan_audio_files(&self) -> Result<Vec<PathBuf>> {
         let live = read::paths(
             &self.connection.lock(),
@@ -617,14 +654,17 @@ impl Store {
         )?;
         let models = statement
             .query_map([], |row| {
-                Ok(InstalledModel {
+                let Some(path) = paths::stored(&self.data_dir, &row.get::<_, String>(1)?) else {
+                    return Ok(None);
+                };
+                Ok(Some(InstalledModel {
                     model_id: row.get(0)?,
-                    path: self.data_dir.join(row.get::<_, String>(1)?),
+                    path,
                     bytes: read::unsigned(row, 2)?,
                     sha256: row.get(3)?,
-                })
+                }))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(models)
+        Ok(models.into_iter().flatten().collect())
     }
 }
