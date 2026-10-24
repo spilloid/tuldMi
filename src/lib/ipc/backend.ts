@@ -26,6 +26,17 @@ export interface BackendEvents {
 }
 
 export type BackendEventName = keyof BackendEvents;
+
+/** Keyset-pagination cursor for list_events. */
+export interface EventCursor {
+  before: number;
+  beforeId: string;
+}
+
+/** Strict (startedAt, id) ordering shared by the demo backend, merging, and cursors. */
+export function compareEvents(a: { startedAt: number; id: string }, b: { startedAt: number; id: string }): number {
+  return a.startedAt - b.startedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
 export type Unsubscribe = () => void;
 
 /** Every command in docs/IPC.md. All reject with a user-presentable string. */
@@ -38,7 +49,10 @@ export interface Backend {
   listDevices(): Promise<DeviceInfo[]>;
   getSettings(): Promise<Settings>;
   updateSettings(settings: Settings): Promise<Settings>;
-  listEvents(before: number | null, limit: number): Promise<SpeechEvent[]>;
+  /** Newest first, ordered by (startedAt desc, id desc). The cursor is the oldest event
+   *  already held: results are strictly older than (before, beforeId), so events sharing a
+   *  start time are never skipped. */
+  listEvents(cursor: EventCursor | null, limit: number): Promise<SpeechEvent[]>;
   getEvent(id: string): Promise<SpeechEvent | null>;
   search(query: SearchQuery): Promise<SearchHit[]>;
   retryEvent(id: string): Promise<boolean>;

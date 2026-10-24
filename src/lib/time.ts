@@ -1,4 +1,5 @@
 import type { SpeechEvent } from "./ipc/types";
+import { compareEvents } from "./ipc/backend";
 
 export const MINUTE = 60_000;
 export const HOUR = 60 * MINUTE;
@@ -111,7 +112,7 @@ export type TimelineRow =
  * and gap rows between conversations on the same day.
  */
 export function buildTimeline(events: SpeechEvent[], gapMs: number = CONVERSATION_GAP_MS): TimelineRow[] {
-  const sorted = [...events].sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+  const sorted = [...events].sort(compareEvents);
   const rows: TimelineRow[] = [];
   let current: Conversation | null = null;
   let currentDay: string | null = null;
@@ -154,7 +155,7 @@ export function buildTimeline(events: SpeechEvent[], gapMs: number = CONVERSATIO
 export function mergeEvents(existing: SpeechEvent[], incoming: SpeechEvent[]): SpeechEvent[] {
   const map = new Map(existing.map((e) => [e.id, e]));
   for (const e of incoming) map.set(e.id, e);
-  return [...map.values()].sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+  return [...map.values()].sort(compareEvents);
 }
 
 export function eventText(ev: SpeechEvent): string {

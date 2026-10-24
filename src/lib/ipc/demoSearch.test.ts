@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildDemoEvents } from "./demoData";
 import { buildSnippet, queryTerms, searchEvents } from "./demoSearch";
 import { DemoBackend } from "./demo";
+import { compareEvents } from "./backend";
 import { HIGHLIGHT_END, HIGHLIGHT_START } from "./types";
 import type { SearchQuery } from "./types";
 import { splitSnippet } from "../snippet";
@@ -93,8 +94,31 @@ describe("demo search", () => {
     const first = await b.listEvents(null, 10);
     expect(first).toHaveLength(10);
     for (let i = 1; i < first.length; i++) expect(first[i].startedAt).toBeLessThanOrEqual(first[i - 1].startedAt);
-    const next = await b.listEvents(first[first.length - 1].startedAt, 10);
-    expect(next.every((e) => e.startedAt < first[first.length - 1].startedAt)).toBe(true);
+    const last = first[first.length - 1];
+    const next = await b.listEvents({ before: last.startedAt, beforeId: last.id }, 10);
+    expect(next.every((e) => compareEvents(e, last) < 0)).toBe(true);
+    b.dispose();
+  });
+
+  it("paging never skips events that share a start time", async () => {
+    const b = new DemoBackend({ now: NOW, still: true });
+    const all = await b.listEvents(null, 1000);
+    // Force ties: give every event in the newest 7 the same start time.
+    const t = all[0].startedAt;
+    const internal = (b as unknown as { events: { id: string; startedAt: number }[] }).events;
+    const tied = new Set(all.slice(0, 7).map((e) => e.id));
+    internal.forEach((e) => { if (tied.has(e.id)) e.startedAt = t; });
+    const seen: string[] = [];
+    let cursor: { before: number; beforeId: string } | null = null;
+    for (let guard = 0; guard < 100; guard++) {
+      const page = await b.listEvents(cursor, 3);
+      if (!page.length) break;
+      seen.push(...page.map((e) => e.id));
+      const l = page[page.length - 1];
+      cursor = { before: l.startedAt, beforeId: l.id };
+    }
+    expect(new Set(seen).size).toBe(all.length);
+    expect(seen).toHaveLength(all.length);
     b.dispose();
   });
 });

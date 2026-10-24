@@ -1,4 +1,5 @@
-import type { Backend, BackendEventName, BackendEvents, Unsubscribe } from "./backend";
+import type { Backend, BackendEventName, BackendEvents, EventCursor, Unsubscribe } from "./backend";
+import { compareEvents } from "./backend";
 import {
   DEMO_DEVICES,
   DEMO_MODEL_ID,
@@ -225,10 +226,10 @@ export class DemoBackend implements Backend {
     return structuredClone(this.settings);
   }
 
-  async listEvents(before: number | null, limit: number) {
+  async listEvents(cursor: EventCursor | null, limit: number) {
     const list = this.events
-      .filter((e) => before == null || e.startedAt < before)
-      .sort((a, b) => b.startedAt - a.startedAt)
+      .filter((e) => !cursor || compareEvents(e, { startedAt: cursor.before, id: cursor.beforeId }) < 0)
+      .sort((a, b) => compareEvents(b, a))
       .slice(0, limit);
     return structuredClone(list);
   }

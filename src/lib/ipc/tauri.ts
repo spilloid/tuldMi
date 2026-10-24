@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Backend, BackendEventName, BackendEvents, Unsubscribe } from "./backend";
+import type { Backend, BackendEventName, BackendEvents, EventCursor, Unsubscribe } from "./backend";
 import type {
   CaptureStatus,
   DeviceInfo,
@@ -23,8 +23,8 @@ export class TauriBackend implements Backend {
   listDevices = () => invoke<DeviceInfo[]>("list_devices");
   getSettings = () => invoke<Settings>("get_settings");
   updateSettings = (settings: Settings) => invoke<Settings>("update_settings", { settings });
-  listEvents = (before: number | null, limit: number) =>
-    invoke<SpeechEvent[]>("list_events", { before: before ?? undefined, limit });
+  listEvents = (cursor: EventCursor | null, limit: number) =>
+    invoke<SpeechEvent[]>("list_events", { before: cursor?.before, beforeId: cursor?.beforeId, limit });
   getEvent = (id: string) => invoke<SpeechEvent | null>("get_event", { id });
   search = (query: SearchQuery) => invoke<SearchHit[]>("search", { query });
   retryEvent = (id: string) => invoke<boolean>("retry_event", { id });

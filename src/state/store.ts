@@ -179,8 +179,8 @@ export class AppStore {
     this.loadingOlder = true;
     this.timeline.set({ ...t, loading: true });
     try {
-      const oldest = t.events[0].startedAt;
-      const page = await this.backend.listEvents(oldest, PAGE);
+      const oldest = t.events[0];
+      const page = await this.backend.listEvents({ before: oldest.startedAt, beforeId: oldest.id }, PAGE);
       this.timeline.update((cur) => ({
         ...cur,
         events: mergeEvents(cur.events, page),
