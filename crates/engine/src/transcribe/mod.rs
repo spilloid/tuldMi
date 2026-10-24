@@ -21,6 +21,21 @@ pub struct Transcript {
     pub language: Option<String>,
 }
 
+/// RMS below which audio is treated as silence and not sent to the model at all.
+pub const MIN_TRANSCRIBE_RMS: f64 = 0.002;
+/// Shortest clip (100 ms at 16 kHz) worth running inference on.
+pub const MIN_TRANSCRIBE_SAMPLES: usize = 1_600;
+
+/// True when `samples_16k` is too short or too quiet to run inference on. Providers return an
+/// empty transcript for such audio *without* inference, so callers must not treat that result
+/// as "transcribed" (e.g. delete-after-transcription keeps such audio).
+pub fn below_energy_gate(samples_16k: &[f32]) -> bool {
+    let rms = (samples_16k.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>()
+        / samples_16k.len().max(1) as f64)
+        .sqrt();
+    samples_16k.len() < MIN_TRANSCRIBE_SAMPLES || rms < MIN_TRANSCRIBE_RMS
+}
+
 pub trait TranscriptionProvider: Send {
     /// Catalog id of the loaded model, e.g. "whisper-base.en".
     fn model_id(&self) -> &str;

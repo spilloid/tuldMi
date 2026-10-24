@@ -224,7 +224,14 @@ struct Pipeline {
     total: u64,
     level: LevelFrame,
     drops: u64,
+    /// Capture instant of the newest real buffer.
+    last_buffer: Option<Instant>,
+    /// The device stopped delivering buffers (WASAPI loopback while nothing plays); the
+    /// processor has been feeding synthetic silence so open segments close on time.
+    quiet: bool,
 }
+/// Slack added to `max(min_silence_ms, post_roll_ms)` before a source counts as gone quiet.
+const QUIET_SLACK_MS: u64 = 200;
 impl Pipeline {
     fn new(
         source: Source,
@@ -257,7 +264,41 @@ impl Pipeline {
                 speaking: false,
             },
             drops: 0,
+            last_buffer: None,
+            quiet: false,
         })
+    }
+    /// Feed digital silence (in the device's native format, through the converter so its
+    /// buffered tail stays in order) from the end of the delivered stream up to `now`. The
+    /// stream clock stays contiguous, so segments closed by this silence keep pre-gap times.
+    fn silence_until(&mut self, now: Instant) -> Vec<SpeechSegment> {
+        let Some(clock) = &self.clock else {
+            return Vec::new();
+        };
+        let Some(missing) = now.checked_duration_since(clock.instant_of(self.total)) else {
+            return Vec::new();
+        };
+        let rate = u64::from(self.convert.in_rate());
+        let channels = usize::from(self.convert.channels());
+        let mut frames = u64::try_from(missing.as_micros().saturating_mul(u128::from(rate)) / 1_000_000)
+            .unwrap_or(u64::MAX);
+        let mut finished = Vec::new();
+        // At most one second per chunk keeps memory bounded however long the gap was.
+        while frames > 0 {
+            let chunk = frames.min(rate) as usize;
+            frames -= chunk as u64;
+            let mut samples = Vec::new();
+            if self
+                .convert
+                .process(&vec![0.0; chunk * channels], &mut samples)
+                .is_err()
+            {
+                break;
+            }
+            self.total += samples.len() as u64;
+            finished.extend(self.samples(&samples, true));
+        }
+        finished
     }
     fn samples(&mut self, samples: &[f32], recording: bool) -> Vec<SpeechSegment> {
         let mut readings = Vec::new();
@@ -320,6 +361,8 @@ struct Processor {
     session: Option<Uuid>,
     monitoring: bool,
     outbox: Mutex<VecDeque<WriteJob>>,
+    /// The energy-VAD fallback is announced once per engine run, when first used.
+    vad_noticed: bool,
 }
 impl Processor {
     fn wants_devices(&self) -> bool {
@@ -441,38 +484,80 @@ impl Processor {
             Err(error) => self.failed(source, &error.to_string()),
         }
     }
+    /// While a session runs, `Recording` requires at least one enabled source with a live
+    /// stream (`Active`, or opened and awaiting its first `Opened` message). Otherwise the
+    /// state is `Error`: either every enabled source failed (each shows `Unavailable` with its
+    /// error, and housekeeping keeps retrying), or no source is enabled at all (each shows
+    /// `enabled: false` / `Disabled`).
     fn recompute_state(&self) {
+        let live = self
+            .streams
+            .keys()
+            .any(|&source| enabled(&self.settings, source));
         let mut status = self.shared.status.lock();
         if self.session.is_some() {
-            status.state = if status
-                .sources
-                .iter()
-                .any(|s| s.state == SourceState::Active)
-            {
+            status.state = if live {
                 CaptureState::Recording
-            } else if status.sources.iter().any(|s| {
-                s.enabled && matches!(s.state, SourceState::Unavailable | SourceState::Error)
-            }) {
-                CaptureState::Error
             } else {
-                CaptureState::Recording
+                CaptureState::Error
             };
         }
     }
     fn failed(&mut self, source: Source, error: &str) {
         self.stop_source(source);
         self.flush_source(source);
-        {
+        // Notify on a change only (newly unavailable, or a different error), not on every
+        // 3 s retry of a device that is still missing.
+        let changed = {
             let mut status = self.shared.status.lock();
-            if let Some(s) = status.sources.iter_mut().find(|s| s.source == source) {
-                s.state = SourceState::Unavailable;
-                s.error = Some(error.into());
-            }
-        }
+            status
+                .sources
+                .iter_mut()
+                .find(|s| s.source == source)
+                .is_some_and(|s| {
+                    let changed = s.state != SourceState::Unavailable
+                        || s.error.as_deref() != Some(error);
+                    s.state = SourceState::Unavailable;
+                    s.error = Some(error.into());
+                    changed
+                })
+        };
         self.recompute_state();
-        self.shared
-            .notice(&format!("{} capture unavailable: {error}", source.as_str()));
+        if changed {
+            self.shared
+                .notice(&format!("{} capture unavailable: {error}", source.as_str()));
+        }
         self.shared.publish();
+    }
+    /// Close segments left open by a source that stopped delivering buffers. Only while the
+    /// processor is keeping up: with audio backed up (writer backpressure) a stale
+    /// `last_buffer` is not a quiet device. A buffer racing this check is handled by the
+    /// resume path in `message`.
+    fn fill_quiet_sources(&mut self) {
+        if self.session.is_none() || self.rx.len() >= 16 || !self.outbox.lock().is_empty() {
+            return;
+        }
+        let v = &self.settings.vad;
+        let limit = Duration::from_millis(
+            u64::from(v.min_silence_ms.max(v.post_roll_ms)) + QUIET_SLACK_MS,
+        );
+        let now = Instant::now();
+        for source in [Source::Mic, Source::System] {
+            let Some(mut pipeline) = self.pipelines.remove(&source) else {
+                continue;
+            };
+            let gone = pipeline
+                .last_buffer
+                .is_some_and(|at| now.saturating_duration_since(at) > limit);
+            // First detection feeds the whole gap (this also runs any buffered VAD remainder);
+            // afterwards keep feeding only while a speech region is still open.
+            if gone && (!pipeline.quiet || pipeline.segmenter.in_speech()) {
+                pipeline.quiet = true;
+                let segments = pipeline.silence_until(now);
+                self.segments(source, &pipeline, segments);
+            }
+            self.pipelines.insert(source, pipeline);
+        }
     }
     fn message(&mut self, msg: CaptureMsg) {
         match msg {
@@ -497,10 +582,11 @@ impl Processor {
                     self.shared.config.vad_model_path.as_deref(),
                 ) {
                     Ok(pipeline) => {
-                        if pipeline.detector.name() == "energy"
-                            && self.shared.config.vad_model_path.is_some()
-                        {
-                            self.shared.notice("Silero unavailable; using energy VAD");
+                        if pipeline.detector.name() == "energy" && !self.vad_noticed {
+                            self.vad_noticed = true;
+                            self.shared.notice(
+                                "Silero VAD unavailable; energy VAD detects loud audio, not speech specifically",
+                            );
                         }
                         self.pipelines.insert(source, pipeline);
                     }
@@ -534,6 +620,28 @@ impl Processor {
                         self.failed(source, "audio conversion failed");
                         return;
                     }
+                    if pipeline.quiet {
+                        // Buffers resumed after a gap. Close anything still open on the
+                        // pre-gap clock, then re-base so post-gap audio gets post-gap times
+                        // and never joins a pre-gap segment.
+                        pipeline.quiet = false;
+                        let recording = self.session.is_some();
+                        let mut closed = Vec::new();
+                        if recording {
+                            closed.extend(pipeline.flush_pending());
+                            closed.extend(pipeline.segmenter.flush());
+                        }
+                        self.segments(source, &pipeline, closed);
+                        pipeline.total = pipeline.total.max(pipeline.segmenter.position());
+                        let frames = data.len() as u64 / u64::from(pipeline.convert.channels());
+                        let duration = Duration::from_micros(
+                            frames.saturating_mul(1_000_000) / u64::from(pipeline.convert.in_rate()),
+                        );
+                        if let Some(clock) = &mut pipeline.clock {
+                            clock.rebase(pipeline.total, at.checked_sub(duration).unwrap_or(at));
+                        }
+                    }
+                    pipeline.last_buffer = Some(at);
                     if pipeline.clock.is_none() {
                         // The resampler may buffer its first native chunk. Anchor
                         // to the captured duration, including that buffered audio.
@@ -643,17 +751,8 @@ pub(super) fn processing(
         session: None,
         monitoring: false,
         outbox: Mutex::new(VecDeque::with_capacity(CAPTURE_CHANNEL_CAPACITY)),
+        vad_noticed: false,
     };
-    if shared
-        .config
-        .vad_model_path
-        .as_ref()
-        .is_none_or(|path| !path.is_file())
-    {
-        shared.notice(
-            "Silero model unavailable; energy VAD detects loud audio, not speech specifically",
-        );
-    }
     let tick = crossbeam_channel::tick(Duration::from_millis(33));
     let no_audio = crossbeam_channel::never();
     loop {
@@ -689,8 +788,8 @@ pub(super) fn processing(
                             if p.wants_devices() { p.open_source(source); }
                         }
                     }
+                    // A retention change is applied by `tuldmi-house` (see `Engine::update_settings`).
                     p.drain(); p.recompute_state();
-                    if old.retention != settings.retention { retain(&shared); }
                     let _ = reply.try_send(Ok(())); shared.publish();
                 }
                 Ok(Command::Recover) => p.recover(),
@@ -708,6 +807,7 @@ pub(super) fn processing(
             },
             recv(audio) -> msg => if let Ok(msg) = msg { p.message(msg); },
             recv(tick) -> _ => {
+                p.fill_quiet_sources();
                 let mut frames = Vec::new();
                 for (source, pipeline) in &mut p.pipelines {
                     frames.push(pipeline.level); pipeline.level.rms = 0.0; pipeline.level.peak = 0.0;
@@ -925,7 +1025,12 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 let provider = provider
                     .as_mut()
                     .ok_or_else(|| Error::Transcription("model is unavailable".into()))?;
-                provider.transcribe(&samples, Some(&settings.language))
+                // The provider skips inference below the energy gate; remember that, since
+                // such an empty result was never actually transcribed.
+                let gated = crate::transcribe::below_energy_gate(&samples);
+                provider
+                    .transcribe(&samples, Some(&settings.language))
+                    .map(|transcript| (transcript, gated))
             })();
             // Never commit after shutdown: the running job is recovered on next startup.
             if shared.cancel_asr.load(Ordering::Acquire) {
@@ -936,17 +1041,30 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 break;
             }
             match result {
-                Ok(transcript) => {
-                    match shared.store.save_transcript(
-                        job.event_id,
-                        &transcript.segments,
-                        transcript.language.as_deref(),
-                        &model.model_id,
-                    ) {
+                Ok((transcript, gated)) => {
+                    let untranscribed = gated && transcript.segments.is_empty();
+                    let saved = if untranscribed {
+                        shared.store.save_untranscribed_quiet(
+                            job.event_id,
+                            transcript.language.as_deref(),
+                            &model.model_id,
+                        )
+                    } else {
+                        shared.store.save_transcript(
+                            job.event_id,
+                            &transcript.segments,
+                            transcript.language.as_deref(),
+                            &model.model_id,
+                        )
+                    };
+                    match saved {
                         Ok(event) => {
                             shared.emit(EngineEvent::EventUpserted(event));
-                            if shared.settings.lock().retention
-                                == Retention::DeleteAfterTranscription
+                            // Quiet audio skipped by the energy gate was never transcribed:
+                            // keep it (age-based retention still applies).
+                            if !untranscribed
+                                && shared.settings.lock().retention
+                                    == Retention::DeleteAfterTranscription
                             {
                                 match shared.store.expire_event_audio(job.event_id) {
                                     Ok(path) => {
@@ -1019,61 +1137,57 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
         let _ = waking.recv_timeout(Duration::from_millis(200));
     }
 }
-fn retain(shared: &Shared) {
-    let _gate = shared.persist_gate.lock();
+/// Apply the retention policy with one bounded SQL update (`Store::expire_audio_events_before`),
+/// never by loading history. Returns the events whose audio expired, for the caller to announce
+/// (outside the persist gate).
+fn retain(shared: &Shared) -> Vec<Uuid> {
     let policy = shared.settings.lock().retention;
-    if policy == Retention::DeleteAfterTranscription {
-        match shared.store.list_events(None, u32::MAX) {
-            Ok(events) => {
-                for event in events.into_iter().filter(|e| {
-                    matches!(e.status, EventStatus::Done | EventStatus::Empty) && e.audio.is_some()
-                }) {
-                    match shared.store.expire_event_audio(event.id) {
-                        Ok(path) => {
-                            if let Some(path) = path
-                                && unlink(&path).is_err()
-                            {
-                                shared.notice("could not remove transcribed audio");
-                            }
-                            if shared.upsert(event.id).is_err() {
-                                shared.notice("could not announce audio expiration");
-                            }
-                        }
-                        Err(_) => shared.notice("audio retention failed"),
-                    }
-                }
+    let (cutoff, keep_quiet) = match policy {
+        // Quiet audio the energy gate never transcribed is not "transcribed" audio.
+        Retention::DeleteAfterTranscription => (i64::MAX, true),
+        policy => match policy.max_age_ms() {
+            // Store protects queued, running and failed audio from expiration.
+            Some(age) => (
+                chrono::Local::now().timestamp_millis().saturating_sub(age),
+                false,
+            ),
+            None => return Vec::new(),
+        },
+    };
+    let _gate = shared.persist_gate.lock();
+    match shared.store.expire_audio_events_before(cutoff, keep_quiet) {
+        Ok(expired) => {
+            // Unlink every file (no short-circuit); report failures once.
+            let failures = expired
+                .iter()
+                .filter_map(|(_, path)| path.as_deref())
+                .filter(|path| unlink(path).is_err())
+                .count();
+            if failures > 0 {
+                shared.notice("could not remove some expired audio");
             }
-            Err(_) => shared.notice("could not read events for retention"),
+            expired.into_iter().map(|(id, _)| id).collect()
         }
-        return;
-    }
-    if let Some(age) = policy.max_age_ms() {
-        // Store protects queued and running audio from age expiration.
-        let cutoff = chrono::Local::now().timestamp_millis().saturating_sub(age);
-        let before = shared.store.list_events(None, u32::MAX).unwrap_or_default();
-        match shared.store.expire_audio_before(cutoff) {
-            Ok(paths) => {
-                for path in &paths {
-                    if unlink(path).is_err() {
-                        shared.notice("could not remove expired audio");
-                    }
-                }
-                for event in before {
-                    if event
-                        .audio
-                        .as_ref()
-                        .is_some_and(|a| paths.iter().any(|p| p == Path::new(&a.path)))
-                    {
-                        let _ = shared.upsert(event.id);
-                    }
-                }
-            }
-            Err(_) => shared.notice("audio retention failed"),
+        Err(_) => {
+            shared.notice("audio retention failed");
+            Vec::new()
         }
     }
 }
-pub(super) fn housekeeping(shared: Arc<Shared>, commands: Sender<Command>) {
-    retain(&shared);
+fn announce(shared: &Shared, expired: Vec<Uuid>) {
+    for id in expired {
+        if shared.upsert(id).is_err() {
+            shared.notice("could not announce audio expiration");
+            break;
+        }
+    }
+}
+pub(super) fn housekeeping(
+    shared: Arc<Shared>,
+    commands: Sender<Command>,
+    requests: Receiver<Sender<()>>,
+) {
+    announce(&shared, retain(&shared));
     let mut last_retention = Instant::now();
     let mut last_recovery = Instant::now();
     while !shared.quit.load(Ordering::Acquire) {
@@ -1085,11 +1199,23 @@ pub(super) fn housekeeping(shared: Arc<Shared>, commands: Sender<Command>) {
             last_recovery = Instant::now();
         }
         if last_retention.elapsed() >= Duration::from_secs(600) {
-            retain(&shared);
+            announce(&shared, retain(&shared));
             last_retention = Instant::now();
         }
         shared.publish();
-        std::thread::sleep(Duration::from_millis(50));
+        match requests.recv_timeout(Duration::from_millis(50)) {
+            // A settings change asked for an immediate sweep; reply before announcing.
+            Ok(reply) => {
+                let expired = retain(&shared);
+                let _ = reply.try_send(());
+                announce(&shared, expired);
+                last_retention = Instant::now();
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => (),
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
     }
 }
 

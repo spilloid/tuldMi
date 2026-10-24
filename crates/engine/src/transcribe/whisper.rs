@@ -45,10 +45,9 @@ impl TranscriptionProvider for WhisperProvider {
         if samples.iter().any(|s| !s.is_finite()) {
             return Err(Error::Transcription("non-finite audio".into()));
         }
-        let rms = (samples.iter().map(|&s| (s as f64).powi(2)).sum::<f64>()
-            / samples.len().max(1) as f64)
-            .sqrt();
-        if samples.len() < 1600 || rms < 0.002 {
+        // Energy gate: skip inference on silence (Whisper hallucinates on it). Callers detect
+        // this case with `below_energy_gate`, since the result was never really transcribed.
+        if super::below_energy_gate(samples) {
             return Ok(Transcript {
                 segments: Vec::new(),
                 language: language.map(str::to_owned),

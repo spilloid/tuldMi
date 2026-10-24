@@ -29,6 +29,8 @@ pub const LATEST_SCHEMA: u32 = 2;
 /// Automatic retries for a transcription job before it is marked failed.
 pub const MAX_ATTEMPTS: u32 = 3;
 pub const DEFAULT_SEARCH_LIMIT: u32 = 50;
+/// Event note for audio the transcriber's energy gate skipped (see `save_untranscribed_quiet`).
+pub const QUIET_AUDIO_NOTE: &str = "Too quiet to transcribe; audio kept";
 
 #[derive(Debug, Clone)]
 pub struct NewAudio {
@@ -285,6 +287,30 @@ impl Store {
         language: Option<&str>,
         model_id: &str,
     ) -> Result<SpeechEvent> {
+        self.finish_job(event_id, segments, language, model_id, None)
+    }
+
+    /// The transcriber's energy gate judged the audio too quiet and skipped inference: the job
+    /// is done and the event `empty`, with `QUIET_AUDIO_NOTE` as its note. Such audio was never
+    /// actually transcribed, so delete-after-transcription keeps it (see
+    /// `expire_audio_events_before`); age-based retention still applies.
+    pub fn save_untranscribed_quiet(
+        &self,
+        event_id: Uuid,
+        language: Option<&str>,
+        model_id: &str,
+    ) -> Result<SpeechEvent> {
+        self.finish_job(event_id, &[], language, model_id, Some(QUIET_AUDIO_NOTE))
+    }
+
+    fn finish_job(
+        &self,
+        event_id: Uuid,
+        segments: &[NewSegment],
+        language: Option<&str>,
+        model_id: &str,
+        note: Option<&str>,
+    ) -> Result<SpeechEvent> {
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let id = event_id.to_string();
@@ -311,9 +337,9 @@ impl Store {
             "empty"
         };
         tx.execute(
-            "UPDATE audio_events SET status = ?2, language = ?3, model_id = ?4, error = NULL
+            "UPDATE audio_events SET status = ?2, language = ?3, model_id = ?4, error = ?5
              WHERE id = ?1",
-            params![id, status, language, model_id],
+            params![id, status, language, model_id, note],
         )?;
         tx.execute(
             "UPDATE transcription_jobs SET state = 'done', last_error = NULL, updated_at = ?2
@@ -493,29 +519,51 @@ impl Store {
     /// (`done` or `empty`). Failed, queued, and transcribing events keep their audio for
     /// retry. Transcripts are kept. Returns validated absolute paths to unlink.
     pub fn expire_audio_before(&self, cutoff: i64) -> Result<Vec<PathBuf>> {
+        Ok(self
+            .expire_audio_events_before(cutoff, false)?
+            .into_iter()
+            .filter_map(|(_, path)| path)
+            .collect())
+    }
+
+    /// `expire_audio_before`, returning each expired event id with its validated path (None
+    /// if the stored path was invalid; the reference is cleared either way). `keep_quiet`
+    /// additionally keeps audio the energy gate never transcribed (`save_untranscribed_quiet`),
+    /// for delete-after-transcription. One bounded UPDATE; no history is loaded.
+    pub fn expire_audio_events_before(
+        &self,
+        cutoff: i64,
+        keep_quiet: bool,
+    ) -> Result<Vec<(Uuid, Option<PathBuf>)>> {
+        // ?1 cutoff, ?2 keep_quiet, ?3 quiet note. Internal SQL; values are bound.
+        const ELIGIBLE: &str = "FROM audio_assets a JOIN audio_events e ON e.asset_id = a.id
+             WHERE a.rel_path IS NOT NULL AND a.expired_at IS NULL AND e.ended_at < ?1
+             AND e.status IN ('done', 'empty')
+             AND NOT (?2 AND e.status = 'empty' AND e.error IS ?3)";
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let paths = {
-            let mut statement = tx.prepare(
-                "UPDATE audio_assets SET rel_path = NULL, expired_at = ?2 WHERE id IN (
-                 SELECT a.id FROM audio_assets a JOIN audio_events e ON e.asset_id = a.id
-                 WHERE a.rel_path IS NOT NULL AND a.expired_at IS NULL AND e.ended_at < ?1
-                 AND e.status IN ('done', 'empty'))",
+        let expired = {
+            // Capture ids and paths before clearing the references in the same transaction.
+            let mut select = tx.prepare(&format!("SELECT e.id, a.rel_path {ELIGIBLE}"))?;
+            let expired = select
+                .query_map(params![cutoff, keep_quiet, QUIET_AUDIO_NOTE], |row| {
+                    Ok((
+                        read::uuid(row, 0)?,
+                        paths::stored(&self.data_dir, &row.get::<_, String>(1)?),
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            tx.execute(
+                &format!(
+                    "UPDATE audio_assets SET rel_path = NULL, expired_at = ?4
+                     WHERE id IN (SELECT a.id {ELIGIBLE})"
+                ),
+                params![cutoff, keep_quiet, QUIET_AUDIO_NOTE, now_ms()],
             )?;
-            // Capture paths before clearing the references in the same transaction.
-            let paths = read::paths(
-                &tx,
-                &self.data_dir,
-                "SELECT a.rel_path FROM audio_assets a JOIN audio_events e ON e.asset_id = a.id
-                 WHERE a.rel_path IS NOT NULL AND a.expired_at IS NULL AND e.ended_at < ?1
-                 AND e.status IN ('done', 'empty')",
-                [cutoff],
-            )?;
-            statement.execute(params![cutoff, now_ms()])?;
-            paths
+            expired
         };
         tx.commit()?;
-        Ok(paths)
+        Ok(expired)
     }
 
     /// Expire one event's audio (DeleteAfterTranscription, or the user's "delete audio").

@@ -15,7 +15,9 @@ The engine has no Tauri dependency and is tested on its own (`cargo test -p tuld
 
 ```
  device callback (cpal / WASAPI)          [capture thread per source, provider-owned]
-   │  copy buffer, try_send ──► bounded channel (512 buffers ≈ 5 s)   full ⇒ drop + count + notice
+   │  copy buffer, try_send ──► bounded channel shared by all sources
+   │                            (512 buffers ≈ 5 s total; ≈ 2.5 s each with two sources)
+   │                            full ⇒ drop + count + notice
    ▼
  tuldmi-proc                              [one thread, all sources]
    ToMono16k (downmix + rubato sinc resample to 16 kHz)
@@ -28,14 +30,22 @@ The engine has no Tauri dependency and is tested on its own (`cargo test -p tuld
                                            └─► EventUpserted ──► UI; wake ASR
  tuldmi-asr                               [one thread]
    Store::next_job ─► read_ogg_opus_16k ─► WhisperProvider::transcribe ─► save_transcript
-   ─► (retention = delete-after-transcription ⇒ expire audio) ─► EventUpserted
+   ─► (retention = delete-after-transcription ⇒ expire audio, unless the energy gate
+       skipped inference: that audio was never transcribed and is kept) ─► EventUpserted
  tuldmi-house                             [one thread]
-   retention sweep (start + every 10 min), orphan sweep (start),
-   device recovery + default-device following (every 3 s)
+   retention sweep (start, every 10 min, and on a retention settings change; one bounded
+   SQL update), orphan sweep (start), device recovery + default-device following (every 3 s)
+ tuldmi-events                            [one thread]
+   the only caller of the shell's EventSink; fed by a bounded queue (Levels and Status
+   latest-wins, others dropped when full), so no engine thread ever waits on the UI
 ```
 
-Capture never waits on encoding, the database, or transcription. If transcription falls behind,
-the queue grows on disk (`transcription_jobs`), not in memory.
+Capture never waits on encoding, the database, transcription, or the UI. If transcription falls
+behind, the queue grows on disk (`transcription_jobs`), not in memory. A source that stops
+delivering buffers (WASAPI loopback while nothing plays) is fed synthetic silence once it has
+been quiet for `max(min_silence_ms, post_roll_ms)` + 200 ms, so an open segment closes on time
+with pre-gap timestamps; when buffers resume, the stream clock is re-based after any open
+segment is closed.
 
 ### Time
 

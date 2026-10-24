@@ -25,8 +25,9 @@ use crossbeam_channel::Sender;
 use crate::types::{DeviceInfo, Source};
 use crate::Result;
 
-/// Buffers queued between a device callback and the engine. At typical 10 ms WASAPI periods
-/// this is ~5 s of audio per source.
+/// Buffers queued between the device callbacks and the engine. One channel is shared by all
+/// sources: at typical 10 ms WASAPI periods this is ~5 s of audio with one active source and
+/// ~2.5 s each with mic and system both active.
 pub const CAPTURE_CHANNEL_CAPACITY: usize = 512;
 
 #[derive(Debug, Clone)]
