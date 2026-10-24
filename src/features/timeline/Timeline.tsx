@@ -3,7 +3,8 @@ import { ArrowDown, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SpeechEvent } from "../../lib/ipc/types";
 import type { Conversation } from "../../lib/time";
-import { buildTimeline, clock, dayLabel, humanDuration } from "../../lib/time";
+import { buildTimeline, clock, dayKey, dayLabel, humanDuration } from "../../lib/time";
+import { DayIndex } from "./DayIndex";
 import { isTypingTarget, overlayOpen, plain } from "../../lib/keys";
 import { transition, useReducedMotion } from "../../lib/motion";
 import { useStatus, useTimeline } from "../../state/hooks";
@@ -216,6 +217,8 @@ export function Timeline({ routeEventId }: { routeEventId?: string }) {
         </div>
       </div>
 
+      <DayIndex events={events} scroller={scroller} />
+
       <AnimatePresence>
         {showPill && (
           <motion.div
@@ -258,7 +261,7 @@ function DayHeader({ at, events }: { at: number; events: SpeechEvent[] }) {
   const dayEvents = events.filter((e) => e.startedAt >= at && e.startedAt < dayEnd);
   const speech = dayEvents.reduce((n, e) => n + (e.endedAt - e.startedAt), 0);
   return (
-    <div className="sticky top-0 z-10 -mx-6 mb-2 mt-6 bg-canvas px-6 pb-2 pt-4 max-[1100px]:-mx-4 max-[1100px]:px-4">
+    <div id={`day-${dayKey(at)}`} data-day={at} className="sticky top-0 z-10 -mx-6 mb-2 mt-6 bg-canvas px-6 pb-2 pt-4 max-[1100px]:-mx-4 max-[1100px]:px-4">
       <div className="flex items-baseline gap-3 border-b border-line-soft pb-2.5">
         <h2 className="font-display text-[23px] font-[480] leading-none tracking-[-0.015em] text-text">{title}</h2>
         <span className="text-sm text-muted">{detail}</span>

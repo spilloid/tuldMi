@@ -759,7 +759,7 @@ export function AboutSection() {
         </Row>
         <Row label="Transcription models" description="Downloaded models carry their own licenses, shown in Settings → Transcription." />
       </Group>
-      <p className="text-center text-sm text-faint">A Spillers Technology product. Made to be private by design.</p>
+      <p className="text-center text-sm text-faint">A Spillers Technology product. Private by design.</p>
       <Dialog open={open} onOpenChange={setOpen} title="Third-party notices" description="tuldMi is MIT licensed. It includes the following components under their own licenses." width={540}>
         <ul className="mt-4 divide-y divide-line-soft rounded-lg border border-line">
           {NOTICES.map(([name, lic, what]) => (
