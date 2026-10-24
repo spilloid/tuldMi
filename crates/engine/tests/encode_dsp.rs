@@ -46,7 +46,7 @@ fn silence_and_clipping_are_handled() {
     let loud: Vec<f32> = sine(200.0, 16_000, 0.5, 3.0); // out of range: must clamp, not panic
     let p2 = dir.path().join("l.ogg");
     let enc2 = write_ogg_opus(&p2, &loud).unwrap();
-    assert!(enc2.peaks.iter().any(|&v| v == 255));
+    assert!(enc2.peaks.contains(&255));
 }
 
 #[test]
@@ -71,11 +71,11 @@ fn resampler_preserves_duration_and_frequency_across_odd_chunks() {
         let mut k = 0;
         while i < interleaved.len() {
             let n = (sizes[k % sizes.len()] * ch as usize).min(interleaved.len() - i);
-            r.process(&interleaved[i..i + n], &mut out);
+            r.process(&interleaved[i..i + n], &mut out).unwrap();
             i += n;
             k += 1;
         }
-        r.flush(&mut out);
+        r.flush(&mut out).unwrap();
         let expected = 48_000usize; // 3 s at 16 kHz
         assert!((out.len() as i64 - expected as i64).abs() <= 64, "{rate} Hz/{ch} ch: got {} samples", out.len());
         // Zero crossings ~ 2 * 1000 * 3 = 6000 if the frequency survived.

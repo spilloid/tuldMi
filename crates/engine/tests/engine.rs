@@ -205,8 +205,12 @@ fn delete_and_retention_remove_files_but_keep_transcripts() {
     engine.delete_event(ev.id).unwrap();
     assert!(engine.store().get_event(ev.id).unwrap().is_none());
     assert!(sink.wait_for(Duration::from_secs(2), |x| matches!(x, EngineEvent::EventDeleted(id) if *id == ev.id)).is_some());
+    // The fixture has an ~860 ms pause between its two sentences, longer than the 700 ms
+    // silence threshold, so it may legitimately produce two events. Only the deleted one's
+    // file must be gone; the count must match the events that still hold audio.
+    let with_audio = engine.list_events(None, 50).unwrap().iter().filter(|e| e.audio.is_some()).count() as u64;
     let stats = engine.storage_stats().unwrap();
-    assert_eq!(stats.audio_files, 0);
+    assert_eq!(stats.audio_files, with_audio);
     engine.shutdown();
 }
 
