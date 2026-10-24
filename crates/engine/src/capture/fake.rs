@@ -21,6 +21,9 @@ pub struct FakeSource {
     /// the first stream opened for this source fails; reopening yields a healthy stream.
     pub fail_after: Option<usize>,
     pub device_name: String,
+    /// After `samples` is exhausted: `true` = keep sending digital silence; `false` = send
+    /// nothing at all, like WASAPI loopback while nothing is playing.
+    pub silence_when_exhausted: bool,
 }
 
 impl FakeSource {
@@ -33,6 +36,7 @@ impl FakeSource {
             realtime: false,
             fail_after: None,
             device_name: "Fake device".into(),
+            silence_when_exhausted: true,
         }
     }
 }
@@ -162,6 +166,12 @@ impl AudioCaptureProvider for FakeProvider {
                         return;
                     }
                     let exhausted = offset >= fake.samples.len();
+                    if exhausted && !fake.silence_when_exhausted {
+                        // Real loopback goes quiet: no buffers until something plays again.
+                        // Park until the stream is stopped.
+                        let _ = stopped.recv();
+                        return;
+                    }
                     let data = if exhausted {
                         vec![0.0; width]
                     } else {

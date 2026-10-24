@@ -300,3 +300,107 @@ fn walk(p: &std::path::Path) -> Vec<PathBuf> {
     }
     out
 }
+
+// --- regressions from the 2026-10-24 release-gate review (docs/dev-process.md, RG1) ---
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64
+}
+
+/// WASAPI loopback delivers *no buffers* while nothing plays. Speech that ends right before
+/// playback stops must still be closed, persisted and correctly timestamped.
+#[test]
+fn source_going_quiet_still_closes_and_stamps_the_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Arc::new(Collect::default());
+    let mut clip = noise(32_000, 0.002); // 2 s
+    // Speech runs right up to the moment playback stops (trailing quiet trimmed), then the
+    // device sends no buffers at all.
+    let speech = fixture();
+    let last_loud = speech.iter().rposition(|s| s.abs() > 0.02).unwrap_or(speech.len());
+    clip.extend_from_slice(&speech[..last_loud + 1]);
+    let src = FakeSource { realtime: true, silence_when_exhausted: false, ..FakeSource::mono_16k(clip) };
+    let provider = Arc::new(FakeProvider::new().with_source(Source::System, src));
+    let engine = Engine::start_with_provider(config(dir.path()), sink.clone(), provider).unwrap();
+    onboarded(&engine, false, true);
+    let t0 = now_ms();
+    engine.set_paused(false).unwrap();
+    // The *last* utterance runs up to the moment the device goes quiet. It must be closed
+    // within min-silence/post-roll plus slack, not "whenever audio resumes".
+    let speech_end_offset = 2_000 + (last_loud as i64) / 16;
+    let ev = sink.wait_for(Duration::from_secs(16), |e| {
+        matches!(e, EngineEvent::EventUpserted(ev) if ev.source == Source::System && ev.ended_at - t0 >= speech_end_offset - 1_500)
+    });
+    let Some(EngineEvent::EventUpserted(ev)) = ev else { panic!("the utterance that ran up to the device going quiet was never closed") };
+    let end_offset = ev.ended_at - t0;
+    assert!(end_offset <= speech_end_offset + 2_500, "event end stamped {end_offset} ms; speech ended at ~{speech_end_offset} ms (timestamps shifted by the gap?)");
+    let first = engine.list_events(None, 10).unwrap().into_iter().map(|e| e.started_at - t0).min().unwrap();
+    assert!((500..=4_000).contains(&first), "first event stamped {first} ms after start; speech began ~2 s in");
+    engine.shutdown();
+}
+
+/// A sink that blocks (e.g. the shell's tray during process exit) must never stop the engine
+/// from persisting in-progress speech or from shutting down promptly.
+#[test]
+fn blocking_sink_cannot_lose_speech_or_hang_shutdown() {
+    struct Blocking {
+        armed: std::sync::atomic::AtomicBool,
+        events: Mutex<Vec<EngineEvent>>,
+    }
+    impl EventSink for Blocking {
+        fn emit(&self, e: EngineEvent) {
+            if matches!(e, EngineEvent::Status(_)) && self.armed.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_secs(3600));
+            }
+            self.events.lock().push(e);
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Arc::new(Blocking { armed: false.into(), events: Mutex::new(vec![]) });
+    let mut clip = noise(32_000, 0.002);
+    clip.extend(fixture());
+    let provider = Arc::new(
+        FakeProvider::new()
+            .with_source(Source::Mic, FakeSource { realtime: true, ..FakeSource::mono_16k(clip.clone()) })
+            .with_source(Source::System, FakeSource { realtime: true, ..FakeSource::mono_16k(clip) }),
+    );
+    let engine = Engine::start_with_provider(config(dir.path()), sink.clone(), provider).unwrap();
+    onboarded(&engine, true, true);
+    engine.set_paused(false).unwrap();
+    std::thread::sleep(Duration::from_millis(4_500)); // both sources mid-utterance
+    sink.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    let t = Instant::now();
+    engine.shutdown();
+    assert!(t.elapsed() < Duration::from_millis(2_500), "shutdown took {:?} with a blocked sink", t.elapsed());
+    drop(engine);
+    let store = tuldmi_engine::storage::Store::open(dir.path()).unwrap();
+    let events = store.list_events(None, 10).unwrap();
+    assert_eq!(events.len(), 2, "both in-progress utterances must be persisted on shutdown");
+}
+
+#[test]
+fn stale_partial_downloads_are_swept_at_start() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("models")).unwrap();
+    let part = dir.path().join("models").join("ggml-tiny.en.bin.part");
+    std::fs::write(&part, vec![0u8; 1024]).unwrap();
+    let engine = Engine::start_with_provider(config(dir.path()), Arc::new(Collect::default()), Arc::new(FakeProvider::new())).unwrap();
+    assert!(!part.exists(), "a .part left by a previous run must be removed at start");
+    engine.shutdown();
+}
+
+#[test]
+fn missing_device_notices_once_not_every_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Arc::new(Collect::default());
+    // No Mic source configured: every open attempt fails.
+    let engine = Engine::start_with_provider(config(dir.path()), sink.clone(), Arc::new(FakeProvider::new())).unwrap();
+    onboarded(&engine, true, false);
+    engine.set_paused(false).unwrap();
+    std::thread::sleep(Duration::from_secs(8)); // >= 2 retry cycles
+    let n = sink.count(|e| matches!(e, EngineEvent::Notice { .. }));
+    assert!(n <= 1, "{n} notices for one unavailable device; notify on state change only");
+    let st = engine.status();
+    assert_ne!(st.state, CaptureState::Recording, "nothing is being captured, so the status must not say Recording");
+    engine.shutdown();
+}
