@@ -70,6 +70,8 @@ pub struct SourceStatus {
 #[serde(rename_all = "camelCase")]
 pub struct CaptureStatus {
     pub state: CaptureState,
+    /// Devices open for the onboarding/settings level test only; nothing is stored.
+    pub monitoring: bool,
     pub session_id: Option<Uuid>,
     pub session_started_at: Option<i64>,
     pub sources: Vec<SourceStatus>,
@@ -310,6 +312,8 @@ impl Default for VadSettings {
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub onboarding_complete: bool,
+    /// When the user acknowledged the recording-consent notice (epoch ms).
+    pub consent_acknowledged_at: Option<i64>,
     pub mic_enabled: bool,
     /// None = follow the system default device.
     pub mic_device_id: Option<String>,
@@ -332,6 +336,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             onboarding_complete: false,
+            consent_acknowledged_at: None,
             mic_enabled: true,
             mic_device_id: None,
             system_enabled: true,

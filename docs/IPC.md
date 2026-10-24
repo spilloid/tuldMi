@@ -43,7 +43,7 @@ Audio playback: `convertFileSrc(event.audio.path)` (asset protocol, scoped to th
 | `tuldmi://event-deleted` | `string` (event id) |
 | `tuldmi://model-progress` | `ModelProgress` |
 | `tuldmi://notice` | `{ level: "info" \| "warning" \| "error", message: string }` |
-| `tuldmi://navigate` | `{ view: "timeline" \| "settings" \| "search", section?: string }` — from tray menu |
+| `tuldmi://navigate` | `{ view: "timeline" | "settings" | "search", section?: string }` — from tray menu. Settings sections: `audio`, `transcription`, `recording`, `retention`, `privacy`, `appearance`, `shortcuts`, `startup`, `storage`, `about`. |\| "settings" \| "search", section?: string }` — from tray menu |
 
 ## Window / tray behaviour
 
@@ -52,3 +52,12 @@ Audio playback: `convertFileSrc(event.audio.path)` (asset protocol, scoped to th
 - Tray menu: status line, Pause/Resume, Open tuldMi, Mic/System status lines, backlog line,
   Settings…, Quit tuldMi. Tray icon reflects recording / paused / error.
 - Global shortcut (setting `pauseShortcut`) toggles pause from anywhere.
+
+## Contract notes (2026-10-24)
+
+- `CaptureStatus.monitoring` is true while devices are open for the level test only.
+- `Settings.consentAcknowledgedAt` records when the user acknowledged the recording-consent
+  notice in onboarding (epoch ms); onboarding requires it.
+- App version: use `getVersion()` from `@tauri-apps/api/app` (no custom command).
+- Deferred to v0.1.x: listing in-flight downloads on reload, search offset paging, a source filter
+  on export, per-model language lists.

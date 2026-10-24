@@ -54,6 +54,7 @@ impl Shared {
             settings: Mutex::new(settings),
             status: Mutex::new(CaptureStatus {
                 state: CaptureState::Stopped,
+                monitoring: false,
                 session_id: None,
                 session_started_at: None,
                 sources,
@@ -77,11 +78,12 @@ impl Shared {
         }
     }
     pub fn publish(&self) {
+        // Dedupe only. A time throttle here dropped the *last* change of a quick burst
+        // (e.g. Starting -> Recording within 100 ms) with no trailing publish, leaving the
+        // UI and tray showing a stale state. Status changes are infrequent; send each one.
         let status = self.status.lock().clone();
         let mut published = self.published.lock();
-        if published.0.elapsed() >= Duration::from_millis(100)
-            && published.1.as_ref() != Some(&status)
-        {
+        if published.1.as_ref() != Some(&status) {
             *published = (Instant::now(), Some(status.clone()));
             drop(published);
             self.emit(EngineEvent::Status(status));
@@ -408,6 +410,7 @@ impl Processor {
             self.flush_source(source);
         }
         self.monitoring = false;
+        self.shared.status.lock().monitoring = false;
         if let Some(session) = self.session.take() {
             self.queue(WriteJob::End(
                 session,
@@ -671,7 +674,7 @@ pub(super) fn processing(
                 Ok(Command::Pause(paused, reply)) => p.pause(paused, reply),
                 Ok(Command::Monitor(enabled, reply)) => {
                     if p.session.is_none() {
-                        if enabled && !p.monitoring { p.monitoring = true; for source in [Source::Mic, Source::System] { p.open_source(source); } p.drain(); }
+                        if enabled && !p.monitoring { p.monitoring = true; shared.status.lock().monitoring = true; for source in [Source::Mic, Source::System] { p.open_source(source); } p.drain(); }
                         else if !enabled && p.monitoring { p.close(); }
                     }
                     let _ = reply.try_send(Ok(())); shared.publish();
