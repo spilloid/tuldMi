@@ -19,7 +19,7 @@ interface ScriptedConversation {
 const ME: Speaker = { id: "00000000-0000-4000-8000-00000000000a", label: "Me", kind: "self" };
 const REMOTE: Speaker = { id: "00000000-0000-4000-8000-00000000000b", label: "Remote", kind: "remote" };
 
-export const DEMO_MODEL_ID = "parakeet-tdt-0.6b-v3";
+export const DEMO_MODEL_ID = "whisper-base.en";
 export const DEMO_RETENTION_DAYS = 7;
 
 const conversations: ScriptedConversation[] = [
@@ -260,37 +260,63 @@ export const DEMO_DEVICES: DeviceInfo[] = [
   { id: "out:hdmi", name: "DELL U2723QE (NVIDIA High Definition Audio)", kind: "output", isDefault: false },
 ];
 
+// Mirrors crates/engine/src/models.rs CATALOG exactly (ids, names, sizes, license).
+const HF_BASE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
+const DEMO_LICENSE = "MIT (OpenAI Whisper weights; ggml conversion by whisper.cpp)";
+
 export const DEMO_MODELS: ModelInfo[] = [
   {
-    id: "parakeet-tdt-0.6b-v3",
-    name: "Parakeet TDT 0.6B v3",
-    description: "Fast, accurate transcription with punctuation and word timestamps. Runs well on CPU.",
-    sizeBytes: 671_088_640,
-    languages: "Multilingual",
-    license: "CC-BY-4.0",
-    url: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
+    id: "whisper-tiny.en",
+    name: "Whisper Tiny (English)",
+    description: "Fastest and smallest. Good for older or low-power machines; less accurate.",
+    sizeBytes: 77_704_715,
+    languages: "English",
+    license: DEMO_LICENSE,
+    url: HF_BASE + "ggml-tiny.en.bin",
+    installed: false,
+    recommended: false,
+  },
+  {
+    id: "whisper-base.en",
+    name: "Whisper Base (English)",
+    description: "Balanced speed and accuracy for English on most CPUs. Recommended.",
+    sizeBytes: 147_964_211,
+    languages: "English",
+    license: DEMO_LICENSE,
+    url: HF_BASE + "ggml-base.en.bin",
     installed: true,
     recommended: true,
   },
   {
-    id: "whisper-base-en",
-    name: "Whisper base.en",
-    description: "Small and quick. A good fit for older machines when you only speak English.",
-    sizeBytes: 147_964_211,
+    id: "whisper-base",
+    name: "Whisper Base (Multilingual)",
+    description: "Same size as Base English, recognizes ~99 languages.",
+    sizeBytes: 147_951_465,
+    languages: "Multilingual",
+    license: DEMO_LICENSE,
+    url: HF_BASE + "ggml-base.bin",
+    installed: false,
+    recommended: false,
+  },
+  {
+    id: "whisper-small.en",
+    name: "Whisper Small (English)",
+    description: "Noticeably more accurate English; needs a reasonably fast CPU.",
+    sizeBytes: 487_614_201,
     languages: "English",
-    license: "MIT",
-    url: "https://huggingface.co/ggerganov/whisper.cpp",
+    license: DEMO_LICENSE,
+    url: HF_BASE + "ggml-small.en.bin",
     installed: false,
     recommended: false,
   },
   {
     id: "whisper-large-v3-turbo-q5",
-    name: "Whisper large-v3 turbo (q5)",
-    description: "Highest accuracy across many languages. Slower on CPU; best with a recent processor.",
+    name: "Whisper Large v3 Turbo (quantized)",
+    description: "Highest accuracy, multilingual. Slowest on CPU; best on fast machines.",
     sizeBytes: 574_041_195,
     languages: "Multilingual",
-    license: "MIT",
-    url: "https://huggingface.co/ggerganov/whisper.cpp",
+    license: DEMO_LICENSE,
+    url: HF_BASE + "ggml-large-v3-turbo-q5_0.bin",
     installed: false,
     recommended: false,
   },

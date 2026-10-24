@@ -24,6 +24,8 @@ export interface SourceStatus {
 
 export interface CaptureStatus {
   state: CaptureState;
+  /** Devices open for the onboarding/settings level test only; nothing is stored. */
+  monitoring: boolean;
   sessionId: Uuid | null;
   sessionStartedAt: number | null;
   sources: SourceStatus[];
@@ -161,6 +163,8 @@ export const DEFAULT_VAD: VadSettings = {
 
 export interface Settings {
   onboardingComplete: boolean;
+  /** When the user acknowledged the recording-consent notice (epoch ms). */
+  consentAcknowledgedAt: number | null;
   micEnabled: boolean;
   /** null = follow the system default device. */
   micDeviceId: string | null;
@@ -181,6 +185,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   onboardingComplete: false,
+  consentAcknowledgedAt: null,
   micEnabled: true,
   micDeviceId: null,
   systemEnabled: true,
