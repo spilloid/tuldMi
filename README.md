@@ -54,8 +54,10 @@ what is **not** yet protected (no encryption at rest in v0.1.0): [docs/PRIVACY.m
 ## Install
 
 Download `tuldMi_0.1.0_x64-setup.exe` from the GitHub release and run it (per-user install, no
-admin rights needed). The installer is **not code-signed** in v0.1.0, so Windows SmartScreen will
-warn; choose *More info → Run anyway*.
+admin rights needed). The installer, the app and the uninstaller are Authenticode-signed
+(`CN=Joseph Spillers`, Azure Artifact Signing, RFC 3161 timestamped). As a new publisher, SmartScreen
+may still show a reputation prompt for the first downloads. Verify a download with
+`Get-AuthenticodeSignature .	uldMi_0.1.0_x64-setup.exe` and the published `.sha256`.
 
 ## Develop
 
@@ -80,7 +82,6 @@ Models and licenses: [docs/MODELS.md](docs/MODELS.md) · Releasing: [docs/RELEAS
 - No encryption at rest (database and audio are protected by your Windows account / disk
   encryption only).
 - CPU transcription only (no GPU acceleration yet); large models are slow on modest CPUs.
-- Installer is unsigned.
 - Physically unplugging a device and switching the default device are handled in code and in
   tests with a simulated device, but have not yet been exercised on real hardware.
 - No timeline virtualization yet — very long histories (many thousands of events) will get heavy.

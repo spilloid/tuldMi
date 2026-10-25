@@ -30,11 +30,16 @@ First release. Windows 10/11 x64.
   folder, delete all), appearance (system/light/dark), shortcuts, launch at login, storage usage.
 - System tray with runtime-drawn state icons, pause/resume, per-source status and backlog;
   global pause shortcut (Ctrl+Shift+`); close-to-tray with a first-time explanation.
-- Per-user NSIS installer.
+- Per-user NSIS installer; installer, app and uninstaller Authenticode-signed (Azure Artifact
+  Signing, timestamped).
 
 ### Known limitations
 - Windows only. No speaker diarization (Remote is all system audio). No encryption at rest. CPU
-  transcription only. Unsigned installer. Real-hardware unplug/default-device switching not yet
+  transcription only. Real-hardware unplug/default-device switching not yet
   exercised (covered by simulated-device tests). See README.
+- Deferred to 0.1.1 (found in review, low severity): audio of clips too quiet to transcribe is kept
+  indefinitely under "delete after transcription"; the tray uses the recording glyph while testing
+  devices; a settings save can wait up to 5 s during a large retention sweep; rare out-of-order
+  status publish between engine threads.
 
 [0.1.0]: https://github.com/spilloid/tuldMi/releases/tag/v0.1.0

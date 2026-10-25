@@ -19,17 +19,27 @@
 
 ```
 npm ci
-npm run tauri build
+./scripts/release.ps1 -Sign      # or without -Sign for an unsigned local build
 ```
 
-Output: `target/release/bundle/nsis/tuldMi_<version>_x64-setup.exe` (per-user install, no admin).
+Output: `target/release/bundle/nsis/tuldMi_<version>_x64-setup.exe` (per-user install, no admin)
+and its `.sha256`.
 
 ## Signing
 
-v0.1.0 ships **unsigned**; Windows SmartScreen will warn. Spillers Technology's signing path is
-Azure Artifact Signing (corporate-strategy D-0047) — wiring it into a release workflow is a
-v0.1.x item. Do not describe a build as signed until `Get-AuthenticodeSignature` on the
-published asset says `Valid`.
+`scripts/release.ps1 -Sign` builds and signs with Azure Artifact Signing (corporate-strategy
+D-0047: account `jdspille`, profile `primary-profile`, East US). Tauri's `signCommand` calls
+`scripts/sign-windows.ps1` for the app exe before it is packed, the uninstaller, and the
+installer. Prerequisites: `az login` as an identity holding **Artifact Signing Certificate
+Profile Signer** on the profile, the Windows SDK SignTool (10.0.22621+), and
+`winget install -e --id Microsoft.Azure.ArtifactSigningClientTools`.
+
+`target\release\tuldmi.exe` always reads NotSigned after a build (Tauri restores its unpatched
+output); the signed exe is the one inside the installer. Verify by installing
+(`setup.exe /S`) and running `Get-AuthenticodeSignature` on the installed
+`%LOCALAPPDATA%\tuldMi\tuldmi.exe`. Never describe a build as signed until the published asset
+verifies `Valid` with a timestamp. CI signing (an app-registration identity, as SpoolSmith does)
+is a v0.1.x item.
 
 ## Publish
 
