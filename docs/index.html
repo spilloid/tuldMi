@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tuldMi: your conversations, remembered</title>
+  <meta name="description" content="tuldMi listens to the microphone and system audio you allow, keeps only the speech, transcribes it on your own computer, and gives you a calm, searchable timeline of what was said. No account, no cloud, no telemetry. Free and MIT licensed, for Windows.">
+  <meta property="og:title" content="tuldMi: your conversations, remembered.">
+  <meta property="og:description" content="A private, searchable timeline of what was said, transcribed on your own PC. Only speech is kept; nothing leaves your device. Free, MIT licensed, Windows 10/11.">
+  <meta property="og:url" content="https://spilloid.github.io/tuldMi/">
+  <meta property="og:image" content="https://spilloid.github.io/tuldMi/screenshots/timeline-dark.png">
+  <meta name="theme-color" content="#f4efe6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="assets/tuldmi.svg" type="image/svg+xml">
+  <link rel="preload" href="assets/fonts/fraunces-latin-opsz-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="assets/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="header">
+    <div class="wrap header-in">
+      <a class="brand" href="./" aria-label="tuldMi home"><img src="assets/tuldmi.svg" alt="" width="26" height="26">tuldMi</a>
+      <nav aria-label="Main navigation">
+        <a class="hide-sm" href="#how">How it works</a>
+        <a class="hide-sm" href="#privacy">Privacy</a>
+        <a href="guide.html">Docs</a>
+        <a class="nav-cta" href="https://github.com/spilloid/tuldMi">GitHub <span aria-hidden="true">&#8599;</span></a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="wrap hero-head">
+        <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Ambient audio memory &middot; on your own computer &middot; free</p>
+        <h1 id="hero-title">Your conversations, <em>remembered.</em></h1>
+      </div>
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <p class="lead">tuldMi sits quietly in your tray, keeps only the <em>speech</em> from your microphone and your computer&rsquo;s audio, and transcribes it right on your PC. The detail from Tuesday&rsquo;s call is a few keystrokes away, and none of it ever leaves your device.</p>
+          <div class="actions">
+            <a class="button primary" href="https://github.com/spilloid/tuldMi/releases/tag/v0.1.0">
+              <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Download for Windows
+            </a>
+            <a class="button ghost" href="#privacy">What stays private <span aria-hidden="true">&rarr;</span></a>
+          </div>
+          <p class="hero-meta">v0.1.0 &middot; Windows 10/11 x64 &middot; signed 7&nbsp;MB installer &middot; MIT licensed</p>
+          <div class="consent" role="note">
+            <span class="consent-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 3 4.5 6v5.5c0 4.6 3.1 8 7.5 9.5 4.4-1.5 7.5-4.9 7.5-9.5V6L12 3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 8v4.5M12 15.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </span>
+            <p><strong>Recording conversations is regulated.</strong> Many places require everyone&rsquo;s consent, and many workplaces have policies about recording calls. tuldMi makes recording obvious, with a tray icon that always shows its state, instant pause and no hidden mode, but following the rules where you are is up to you. When in doubt, tell people, or pause.</p>
+          </div>
+        </div>
+
+        <figure class="stage" id="stage">
+          <div class="stage-bar">
+            <span class="stage-brand"><img src="assets/tuldmi.svg" alt="" width="18" height="18">tuldMi</span>
+            <span class="rec" id="rec"><span class="rec-dot" aria-hidden="true"></span><span id="rec-label">Listening</span></span>
+            <span class="stage-buttons">
+              <button type="button" id="tape-pause" aria-pressed="false">Pause</button>
+              <button type="button" id="tape-replay">Replay</button>
+            </span>
+          </div>
+          <div class="tape" aria-hidden="true">
+            <div class="lanes"><span class="lane-me">Me</span><span class="lane-remote">Remote</span></div>
+            <canvas id="tape"></canvas>
+          </div>
+          <div class="tape-legend" aria-hidden="true">
+            <span><i class="sw kept"></i>speech, kept</span>
+            <span><i class="sw gone"></i>silence, never stored</span>
+            <span class="sim">Simulation</span>
+          </div>
+          <div class="find" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="15" height="15"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span class="find-text"><span id="find-q"></span><span class="caret"></span><span class="find-placeholder" id="find-ph">Search your conversations</span></span>
+            <span class="find-hint" id="find-hint"><kbd>Ctrl</kbd><kbd>K</kbd></span>
+          </div>
+          <ol class="lines" id="lines" aria-hidden="true"></ol>
+          <figcaption class="sr-only">Animation, a simulation with made-up speech: two audio lanes, Me for the microphone and Remote for the computer&rsquo;s audio, scroll past. Bursts of speech are highlighted and kept, including a short margin before and after each one; the silence between them is shown faded, as it is never stored. Each kept burst becomes a timestamped transcript line, first as &ldquo;Transcribing&rdquo; and then as text. Finally the word &ldquo;thursday&rdquo; is typed into search and the three lines that mention Thursday are highlighted.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section wrap" aria-labelledby="pitch-title">
+      <div class="pitch">
+        <div>
+          <p class="eyebrow">Why it exists</p>
+          <h2 id="pitch-title">Not a meeting bot.<br><em>A memory.</em></h2>
+        </div>
+        <div class="pitch-copy">
+          <p>Meeting tools want a Record button, a bot in the call, and an AI summary sitting on someone else&rsquo;s server. They also only work for meetings, and most of what you need to remember wasn&rsquo;t said in one.</p>
+          <p><strong>tuldMi is the quiet opposite.</strong> It never joins anything. It just keeps a plain, exact, timestamped record of what was said around your computer, from the five-minute call to the thing you said to yourself, and lets only you search it.</p>
+        </div>
+      </div>
+      <div class="compare">
+        <article class="old"><span class="tag dim">A meeting assistant</span>
+          <ul>
+            <li>You remember to press Record, or invite a bot</li>
+            <li>Audio goes to a server to be transcribed</li>
+            <li>A summary decides what mattered</li>
+            <li>Covers scheduled meetings, not the quick call</li>
+          </ul>
+        </article>
+        <article class="new"><span class="tag">tuldMi</span>
+          <ul>
+            <li>Always there in the tray; pause any time</li>
+            <li>Transcribed on your own CPU; nothing is uploaded</li>
+            <li>The exact words, with your side and theirs kept apart</li>
+            <li>Every conversation, findable in a keystroke</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="how" class="section band" aria-labelledby="how-title">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><p class="eyebrow">How it works</p><h2 id="how-title">Keep the speech.<br><em>Forget the silence.</em></h2></div>
+          <p>Everything below happens on your computer, on background threads that never wait for each other. If transcription falls behind, recording carries on and the backlog waits safely on disk.</p>
+        </div>
+        <div class="steps">
+          <article>
+            <span class="step-number">01</span><h3>Listen</h3>
+            <p>Your microphone becomes <span class="src me">Me</span> and whatever your computer plays becomes <span class="src remote">Remote</span>, kept as separate tracks. Pausing closes the devices: nothing is captured at all.</p>
+          </article>
+          <article>
+            <span class="step-number">02</span><h3>Keep only speech</h3>
+            <p>A voice-activity model (Silero) runs on your device. Silence is never written. 300&nbsp;ms before and 700&nbsp;ms after each burst are kept so no word loses its edges, and long speech is split with overlap.</p>
+          </article>
+          <article>
+            <span class="step-number">03</span><h3>Transcribe locally</h3>
+            <p>whisper.cpp turns each clip into text on your CPU, with a model you chose and downloaded once. No cloud speech service is ever involved.</p>
+          </article>
+          <article>
+            <span class="step-number">04</span><h3>Find it again</h3>
+            <p>Full-text search across everything, with highlights, Me/Remote and date filters, and a jump straight to the moment. Play back the audio you kept, at any speed.</p>
+          </article>
+        </div>
+<pre class="chain" aria-label="The capture pipeline">microphone (<b class="me">Me</b>) + system audio (<b class="remote">Remote</b>), as two tracks
+  → 16 kHz mono → <b>speech detection</b> → speech clips
+  → Ogg Opus on disk (about 3 KB per second of speech)
+  → <b>whisper.cpp</b>, on your CPU → SQLite + full-text index
+  → timeline · search · playback</pre>
+      </div>
+    </section>
+
+    <section id="app" class="section wrap" aria-labelledby="app-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">The app</p><h2 id="app-title">Calm, quick,<br><em>made with care.</em></h2></div>
+        <p>A chronological timeline instead of a table. Your side and theirs in two restrained colors. A command-palette search. Light and dark that follow your system. It feels good to use even before you&rsquo;ve recorded anything.</p>
+      </div>
+      <p class="demo-note"><span aria-hidden="true">&#9432;</span><span><strong>These screenshots use tuldMi&rsquo;s built-in demo data,</strong> which the app always labels with a &ldquo;Demo data&rdquo; badge. The conversations are made up.</span></p>
+
+      <figure class="shot hero-shot">
+        <a href="screenshots/timeline-dark.png">
+          <picture>
+            <source srcset="screenshots/timeline-dark.png" media="(prefers-color-scheme: dark)">
+            <img src="screenshots/timeline-light.png" width="1440" height="900" decoding="async" alt="The tuldMi timeline: today's conversation grouped under a time range, with Me lines in slate and Remote lines in sage, a collapsed '1 h 56 m quiet' gap, two lines still transcribing, a day index on the right, and the recording bar with a Pause button at the bottom.">
+          </picture>
+        </a>
+        <figcaption><h3>A timeline, not a table</h3>Grouped by day and conversation, with quiet stretches collapsed to a single line. New speech arrives without yanking you away from what you&rsquo;re reading; a &ldquo;Back to live&rdquo; pill takes you home.</figcaption>
+      </figure>
+
+      <div class="shots">
+        <figure class="shot">
+          <a href="screenshots/search-palette.png"><img src="screenshots/search-palette.png" width="1440" height="900" loading="lazy" decoding="async" alt="The search palette open over the timeline with the query 'the board': filters for All, Me, Remote and date ranges, two Remote matches with the words highlighted, and the note 'Searched on this device'."></a>
+          <figcaption><h3>Ctrl+K, type, jump</h3>Instant full-text search with highlighted matches and filters. Enter takes you to the exact moment.</figcaption>
+        </figure>
+        <figure class="shot">
+          <a href="screenshots/event-expanded.png"><img src="screenshots/event-expanded.png" width="1440" height="900" loading="lazy" decoding="async" alt="One Remote event expanded in the timeline, showing two timestamped sentences, Copy, Copy with time and Delete actions, its duration, language and confidence, and the docked player below."></a>
+          <figcaption><h3>Every sentence, on the clock</h3>Open any moment for per-sentence timing, copy it with or without timestamps, play it back, or delete it.</figcaption>
+        </figure>
+        <figure class="shot">
+          <a href="screenshots/onboarding-2.png"><img src="screenshots/onboarding-2.png" width="1440" height="900" loading="lazy" decoding="async" alt="Setup step 3 of 7, 'Nothing leaves this computer': the data folder location and a choice of how long audio is kept, with 30 days recommended."></a>
+          <figcaption><h3>Setup that explains itself</h3>Seven short steps: what&rsquo;s captured, where it lives, consent, a live device test, and the model you want.</figcaption>
+        </figure>
+        <figure class="shot">
+          <a href="screenshots/settings-retention.png"><img src="screenshots/settings-retention.png" width="1440" height="900" loading="lazy" decoding="async" alt="Retention settings: delete audio after transcription, keep for 7 days, keep for 30 days, or keep indefinitely, with a note that transcripts are kept separately."></a>
+          <figcaption><h3>You decide how long</h3>Delete audio as soon as it&rsquo;s transcribed, or keep 7 days, 30 days, or forever. Transcripts are kept separately, until you delete them.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="privacy" class="section band" aria-labelledby="privacy-title">
+      <div class="wrap">
+        <div class="section-heading">
+          <div><p class="eyebrow"><span class="dot" aria-hidden="true"></span>Privacy</p><h2 id="privacy-title">Nothing leaves<br><em>this computer.</em></h2></div>
+          <p>tuldMi records conversations, so privacy isn&rsquo;t a feature; it&rsquo;s the product. Here is exactly what happens, including what it doesn&rsquo;t protect yet.</p>
+        </div>
+        <div class="promises">
+          <article>
+            <h3>No account. No cloud. No telemetry.</h3>
+            <p>No sign-in, analytics, crash reporting or cloud processing. Logs record technical events only, never transcript text or audio.</p>
+          </article>
+          <article>
+            <h3>One network request, ever</h3>
+            <p>Downloading the transcription model you pick, from Hugging Face, only when you click <em>Download</em>. The size is shown first and the file is checked against its SHA-256 hash.</p>
+          </article>
+          <article>
+            <h3>Always visible, instantly stoppable</h3>
+            <p>The tray icon shows recording, paused, or device trouble. Pause from the tray, the window, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd>. Closing the window keeps listening, and the first time, tuldMi tells you so.</p>
+          </article>
+          <article>
+            <h3>Yours to export or erase</h3>
+            <p>Export to Markdown or JSON. Delete one conversation, just its audio, or all of your history. Deleting removes the database rows and the audio files.</p>
+          </article>
+        </div>
+        <div class="where">
+          <table>
+            <caption>Where everything lives (Windows)</caption>
+            <tbody>
+              <tr><th scope="row">Transcripts, settings, search index</th><td><code>%APPDATA%\com.spillerstech.tuldmi\tuldmi.db</code></td></tr>
+              <tr><th scope="row">Speech audio you keep</th><td><code>%APPDATA%\com.spillerstech.tuldmi\audio\</code></td></tr>
+              <tr><th scope="row">Transcription models</th><td><code>%APPDATA%\com.spillerstech.tuldmi\models\</code></td></tr>
+              <tr><th scope="row">Logs (no transcript text)</th><td><code>%APPDATA%\com.spillerstech.tuldmi\logs\</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="honest">
+          <span class="honest-icon" aria-hidden="true">!</span>
+          <p><strong>Not yet: encryption at rest.</strong> In v0.1.0 the database and audio are protected by your Windows account and disk encryption (such as BitLocker) only, so anyone who can sign in as you can read them. Database and audio encryption with OS-keychain keys is planned, and tuldMi won&rsquo;t show an &ldquo;encrypted&rdquo; switch until it really protects your data.</p>
+        </div>
+        <p class="fineprint">This page keeps the same promise: no trackers, no analytics, and no third-party fonts or scripts. <a href="PRIVACY.html">The full privacy document <span aria-hidden="true">&rarr;</span></a></p>
+      </div>
+    </section>
+
+    <section class="section wrap" aria-labelledby="features-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">In the box</p><h2 id="features-title">Small download.<br><em>Complete product.</em></h2></div>
+        <p>Everything in the first release works on real audio. Anything that isn&rsquo;t ready is listed honestly below, not hidden behind a switch that does nothing.</p>
+      </div>
+      <div class="features">
+        <article><h3>Two tracks, never mixed</h3><p>Your mic and your computer&rsquo;s audio stay separate from capture to search, so you always know who said it: you, or the other side.</p></article>
+        <article><h3>Local transcription</h3><p>Five Whisper models from 74&nbsp;MB to 547&nbsp;MB, English or about 99 languages. Download one; switch any time.</p></article>
+        <article><h3>Never loses a word</h3><p>Recording keeps going while transcription catches up. Interrupted work resumes after a restart, and failed clips can be retried.</p></article>
+        <article><h3>Instant search</h3><p>A full-text index with highlights, source and date filters, and jump-to-moment, from the palette or a full search view.</p></article>
+        <article><h3>Playback</h3><p>A docked player with a scrubbable waveform and speed control for any audio you chose to keep.</p></article>
+        <article><h3>Tray-first</h3><p>Runtime-drawn state icons, pause and resume, per-source status and backlog, launch at login if you want it.</p></article>
+        <article><h3>Follows your devices</h3><p>Choose devices or follow the Windows default; tuldMi recovers automatically when a device disappears.</p></article>
+        <article><h3>Designed settings</h3><p>Sources, models, speech detection, retention, privacy, appearance, shortcuts and storage use, each on its own page.</p></article>
+      </div>
+    </section>
+
+    <section class="section band" aria-labelledby="limits-title">
+      <div class="wrap limits">
+        <div>
+          <p class="eyebrow">Honest about v0.1.0</p>
+          <h2 id="limits-title">What it doesn&rsquo;t<br><em>do yet.</em></h2>
+        </div>
+        <ul>
+          <li><strong>Windows only.</strong> macOS and Linux are designed for but not built yet.</li>
+          <li><strong>No speaker identification.</strong> &ldquo;Remote&rdquo; is everything your computer plays; individual people on a call aren&rsquo;t told apart.</li>
+          <li><strong>No encryption at rest</strong> (see above).</li>
+          <li><strong>CPU transcription only.</strong> Large models are slow on modest processors; the default model is a good balance.</li>
+          <li><strong>Very long histories get heavy.</strong> Many thousands of events will slow the timeline down until it is virtualized.</li>
+          <li><strong>Unplugging a device and switching the default device</strong> are handled and tested with a simulated device, but not yet on real hardware.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="download" class="section wrap" aria-labelledby="download-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">Download</p><h2 id="download-title">Installed in<br><em>a minute.</em></h2></div>
+        <p>A per-user installer: no administrator rights needed. The installer, the app and the uninstaller are all code-signed and timestamped.</p>
+      </div>
+      <div class="install">
+        <ol class="install-steps">
+          <li><h3>Download</h3><p><code>tuldMi_0.1.0_x64-setup.exe</code> and its <code>.sha256</code> from the release page.</p></li>
+          <li><h3>Check it (optional)</h3><p>The signature should be <code>Valid</code> and signed by <code>CN=Joseph Spillers</code>. As a new publisher, SmartScreen may still ask before the first run.</p></li>
+          <li><h3>Run it, then follow setup</h3><p>Pick your devices, try the live level test, and download a model. That&rsquo;s it: tuldMi is listening from the tray.</p></li>
+        </ol>
+        <div class="install-side">
+<pre class="verify" aria-label="PowerShell commands to verify the download"><span class="c"># in your Downloads folder</span>
+Get-AuthenticodeSignature .\tuldMi_0.1.0_x64-setup.exe
+Get-FileHash .\tuldMi_0.1.0_x64-setup.exe</pre>
+          <a class="button primary wide" href="https://github.com/spilloid/tuldMi/releases/tag/v0.1.0">Get tuldMi 0.1.0 for Windows <span aria-hidden="true">&darr;</span></a>
+          <table class="platforms">
+            <caption class="sr-only">Platform support</caption>
+            <tbody>
+              <tr><th scope="row">Windows 10/11 x64</th><td class="yes">Supported</td></tr>
+              <tr><th scope="row">macOS</th><td>Not yet</td></tr>
+              <tr><th scope="row">Linux</th><td>Not yet</td></tr>
+            </tbody>
+          </table>
+          <p class="fineprint"><a href="INSTALL.html">Full install guide <span aria-hidden="true">&rarr;</span></a></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-in">
+      <div>
+        <a class="brand" href="./"><img src="assets/tuldmi.svg" alt="" width="22" height="22">tuldMi</a>
+        <p>Your conversations, remembered. Free and open source under the MIT license; models and libraries keep their own licenses.</p>
+      </div>
+      <nav aria-label="Footer">
+        <a href="guide.html">Documentation</a>
+        <a href="PRIVACY.html">Privacy</a>
+        <a href="MODELS.html">Models and licenses</a>
+        <a href="https://github.com/spilloid/tuldMi/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/spilloid/tuldMi">Source on GitHub</a>
+      </nav>
+      <p class="sibling">For what you <em>saw</em>, not just what you heard: <a href="https://spilloid.github.io/rsRewind/">rsRewind</a>, tuldMi&rsquo;s sibling for screen memory.</p>
+    </div>
+  </footer>
+
+  <script src="assets/hero.js" defer></script>
+</body>
+</html>

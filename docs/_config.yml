@@ -1,0 +1,23 @@
+title: tuldMi
+description: Your conversations, remembered. A local-first ambient audio memory for Windows.
+url: https://spilloid.github.io
+baseurl: /tuldMi
+markdown: kramdown
+highlighter: rouge
+plugins:
+  - jekyll-optional-front-matter
+  - jekyll-titles-from-headings
+  - jekyll-relative-links
+relative_links:
+  enabled: true
+  collections: false
+exclude:
+  - MISSION.md
+  - RELEASE.md
+  - dev-process.md
+  - README.md
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default

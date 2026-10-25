@@ -1,0 +1,58 @@
+/* Documentation pages. Same tokens as the product page (site.css) and the app (src/styles/tokens.css). */
+@font-face { font-family: "Fraunces"; src: url("fonts/fraunces-latin-opsz-normal.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("fonts/inter-latin-wght-normal.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
+
+:root {
+  color-scheme: light dark;
+  --bg: oklch(0.962 0.009 78); --panel: oklch(0.982 0.006 80); --code: oklch(0.938 0.011 78);
+  --text: oklch(0.235 0.014 58); --muted: oklch(0.46 0.014 64); --line: oklch(0.885 0.011 76);
+  --accent: oklch(0.5 0.125 48); --accent-soft: oklch(0.93 0.04 62);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: oklch(0.172 0.007 68); --panel: oklch(0.2 0.008 68); --code: oklch(0.228 0.009 68);
+    --text: oklch(0.925 0.011 80); --muted: oklch(0.72 0.013 76); --line: oklch(0.29 0.009 68);
+    --accent: oklch(0.79 0.115 64); --accent-soft: oklch(0.29 0.045 58);
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.7 Inter, "Segoe UI", system-ui, sans-serif; }
+a { color: var(--accent); text-underline-offset: .2em; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+header { display: flex; align-items: center; gap: 2rem; padding: .9rem max(1.5rem, calc((100vw - 1240px) / 2)); border-bottom: 1px solid var(--line); background: var(--panel); }
+header > a:last-child { margin-left: auto; }
+.brand { display: inline-flex; align-items: center; gap: .55rem; font: 600 1.35rem/1 Fraunces, Georgia, serif; color: var(--text); text-decoration: none; letter-spacing: -.01em; }
+.brand img { border-radius: 6px; }
+.tagline { color: var(--muted); font-size: .9rem; }
+.shell { max-width: 1240px; margin: auto; display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 3rem; padding: 2rem 1.5rem; }
+nav a { display: block; padding: .4rem .7rem; text-decoration: none; border-radius: 6px; color: var(--muted); font-size: .95rem; }
+nav a:hover, nav a[aria-current] { background: var(--accent-soft); color: var(--text); }
+.nav-title { font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; font-weight: 600; color: var(--muted); padding-left: .7rem; margin: 1.4rem 0 .3rem; }
+.nav-title:first-child { margin-top: 0; }
+main { min-width: 0; max-width: 860px; }
+h1, h2 { font-family: Fraunces, Georgia, serif; font-weight: 600; letter-spacing: -.015em; }
+h1 { font-size: clamp(2rem, 4vw, 2.6rem); line-height: 1.15; margin: 1.6rem 0 1rem; }
+h2 { margin-top: 2.4rem; line-height: 1.25; font-size: 1.6rem; }
+h3 { line-height: 1.3; }
+p, li { overflow-wrap: anywhere; }
+.status { font-size: .8rem; color: var(--muted); padding: .55rem .85rem; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+blockquote { margin: 1.5rem 0; padding: .1rem 1.2rem; border-left: 3px solid var(--accent); background: var(--panel); border-radius: 0 8px 8px 0; }
+code { font-family: "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace; background: var(--code); padding: .12rem .32rem; border-radius: 4px; font-size: .86em; }
+pre { background: var(--code); padding: 1.1rem; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; line-height: 1.5; }
+pre code { padding: 0; background: transparent; }
+table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .92rem; }
+th, td { text-align: left; padding: .7rem .8rem; border: 1px solid var(--line); vertical-align: top; }
+th { background: var(--panel); }
+footer { margin-top: 3rem; border-top: 1px solid var(--line); padding: 1rem 0; color: var(--muted); font-size: .8rem; }
+.skip { position: absolute; left: -9999px; }
+.skip:focus { left: 1rem; top: .4rem; background: var(--panel); padding: .5rem; z-index: 2; }
+main img { max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
+@media (max-width: 760px) {
+  .tagline { display: none; }
+  header { gap: 1rem; padding: .9rem 1rem; }
+  .shell { display: block; padding: 1rem; }
+  nav { margin-bottom: 1.5rem; display: flex; flex-wrap: wrap; gap: .25rem; }
+  nav .nav-title { width: 100%; margin: .6rem 0 0; }
+  nav a { font-size: .85rem; padding: .3rem .6rem; }
+}
