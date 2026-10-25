@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{ site.description | escape }}">
+  <title>{{ page.title | escape }} · {{ site.title | escape }}</title>
+  <link rel="icon" href="{{ '/assets/tuldmi.svg' | relative_url }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ '/assets/docs.css' | relative_url }}">
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <header>
+    <a class="brand" href="{{ '/' | relative_url }}"><img src="{{ '/assets/tuldmi.svg' | relative_url }}" alt="" width="24" height="24">tuldMi</a>
+    <span class="tagline">Your conversations, remembered.</span>
+    <a href="https://github.com/spilloid/tuldMi/releases/latest">Download ↗</a>
+  </header>
+  <div class="shell">
+    <nav aria-label="Documentation">
+      <p class="nav-title">Using tuldMi</p>
+      {% assign guides = 'guide.md,INSTALL.md,PRIVACY.md,MODELS.md' | split: ',' %}
+      {% for path in guides %}
+        {% assign guide = site.pages | where: 'path', path | first %}
+        <a href="{{ guide.url | relative_url }}" {% if page.path == path %}aria-current="page"{% endif %}>{{ guide.title | escape }}</a>
+      {% endfor %}
+      <p class="nav-title">Under the hood</p>
+      {% assign guides = 'ARCHITECTURE.md,IPC.md,FRONTEND.md' | split: ',' %}
+      {% for path in guides %}
+        {% assign guide = site.pages | where: 'path', path | first %}
+        <a href="{{ guide.url | relative_url }}" {% if page.path == path %}aria-current="page"{% endif %}>{{ guide.title | escape }}</a>
+      {% endfor %}
+      <p class="nav-title">Project</p>
+      <a href="{{ '/' | relative_url }}">Product overview</a>
+      <a href="https://github.com/spilloid/tuldMi">Source on GitHub ↗</a>
+      <a href="https://github.com/spilloid/tuldMi/issues">Issues ↗</a>
+    </nav>
+    <main id="content">
+      <div class="status">First release · Windows 10/11 x64 · transcription runs on your computer; nothing is uploaded</div>
+      {{ content }}
+      <footer>MIT licensed ·<a href="https://github.com/spilloid/tuldMi/blob/main/docs/{{ page.path }}">Edit this page</a></footer>
+    </main>
+  </div>
+</body>
+</html>
