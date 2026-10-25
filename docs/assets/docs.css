@@ -17,7 +17,7 @@
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.7 Inter, "Segoe UI", system-ui, sans-serif; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.7 Inter, "Segoe UI", system-ui, sans-serif; font-feature-settings: "calt" 0; }
 a { color: var(--accent); text-underline-offset: .2em; }
 a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
 header { display: flex; align-items: center; gap: 2rem; padding: .9rem max(1.5rem, calc((100vw - 1240px) / 2)); border-bottom: 1px solid var(--line); background: var(--panel); }
