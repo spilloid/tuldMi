@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use parking_lot::{Condvar, Mutex};
 
 use crate::engine::EventSink;
-use crate::types::{CaptureStatus, EngineEvent, LevelFrame};
+use crate::types::{CaptureStatus, DownloadState, EngineEvent, LevelFrame};
 
 /// Ordered (non-coalesced) events held while the sink is slow.
 pub const DISPATCH_CAPACITY: usize = 1024;
@@ -97,8 +97,25 @@ impl EventSink for Dispatcher {
         match event {
             EngineEvent::Status(status) => queue.status = Some(status),
             EngineEvent::Levels(levels) => queue.levels = Some(levels),
-            event if queue.events.len() < DISPATCH_CAPACITY => queue.events.push_back(event),
-            _ => queue.dropped += 1,
+            // In-flight download progress is the only droppable ordered event: coalesce it
+            // with a queued progress for the same model, and drop it past capacity.
+            EngineEvent::ModelProgress(p) if p.state == DownloadState::Downloading => {
+                let same = queue.events.iter_mut().rev().find_map(|e| match e {
+                    EngineEvent::ModelProgress(q) if q.model_id == p.model_id && q.state == DownloadState::Downloading => Some(q),
+                    _ => None,
+                });
+                if let Some(q) = same {
+                    *q = p;
+                } else if queue.events.len() < DISPATCH_CAPACITY {
+                    queue.events.push_back(EngineEvent::ModelProgress(p));
+                } else {
+                    queue.dropped += 1;
+                }
+            }
+            // Timeline changes, notices and terminal download states are never dropped: losing
+            // one leaves the UI permanently wrong (a deleted event still shown, a download stuck
+            // at "downloading"). Their volume is bounded by real events, not by a sink stall.
+            event => queue.events.push_back(event),
         }
         drop(queue);
         self.inner.ready.notify_one();

@@ -534,7 +534,9 @@ impl Processor {
     /// `last_buffer` is not a quiet device. A buffer racing this check is handled by the
     /// resume path in `message`.
     fn fill_quiet_sources(&mut self) {
-        if self.session.is_none() || self.rx.len() >= 16 || !self.outbox.lock().is_empty() {
+        // Any queued real audio means the processor is merely behind, not that a device went
+        // quiet: never invent silence ahead of audio that is already waiting.
+        if self.session.is_none() || !self.rx.is_empty() || !self.outbox.lock().is_empty() {
             return;
         }
         let v = &self.settings.vad;

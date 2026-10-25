@@ -158,10 +158,14 @@ pub fn toggle_pause(app: &AppHandle) {
         window::show_main(app);
         return;
     }
-    let recording = matches!(engine.status().state, CaptureState::Recording | CaptureState::Starting | CaptureState::Error);
     // Tray and global-shortcut handlers run on the main thread; `set_paused` waits for the
-    // engine to flush, which may itself need the main thread. Never wait here.
+    // engine to flush, which may itself need the main thread. Never wait here. Toggles are
+    // serialized and each reads the state only once the previous one finished, so two quick
+    // presses mean pause-then-resume rather than two pauses.
+    static TOGGLE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
     let spawned = std::thread::Builder::new().name("tuldmi-toggle".into()).spawn(move || {
+        let _serial = TOGGLE.lock();
+        let recording = matches!(engine.status().state, CaptureState::Recording | CaptureState::Starting | CaptureState::Error);
         if let Err(e) = engine.set_paused(recording) {
             tracing::warn!(error = %e, "toggle pause failed");
         }
