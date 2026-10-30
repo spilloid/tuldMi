@@ -47,7 +47,8 @@ what is **not** yet protected (no encryption at rest in v0.1.0): [docs/PRIVACY.m
 
 | Platform | Status |
 |---|---|
-| Windows 10/11 x64 | **Supported** — mic + WASAPI loopback (verified on Windows 11) |
+| Windows 11 x64 | **Supported** — mic + WASAPI loopback (verified) |
+| Windows 10 x64 | **Unverified** — built for it, not yet tested on it |
 | macOS | Not yet — architecture ready (`AudioCaptureProvider`), needs a ScreenCaptureKit provider |
 | Linux | Not yet — needs a PipeWire provider |
 
