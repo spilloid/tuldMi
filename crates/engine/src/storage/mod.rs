@@ -31,6 +31,9 @@ pub const MAX_ATTEMPTS: u32 = 3;
 pub const DEFAULT_SEARCH_LIMIT: u32 = 50;
 /// Event note for audio the transcriber's energy gate skipped (see `save_untranscribed_quiet`).
 pub const QUIET_AUDIO_NOTE: &str = "Too quiet to transcribe; audio kept";
+/// How long delete-after-transcription keeps audio the energy gate skipped, so it can be
+/// played or retried before it expires.
+pub const QUIET_AUDIO_GRACE_MS: i64 = 86_400_000;
 
 #[derive(Debug, Clone)]
 pub struct NewAudio {
@@ -292,8 +295,9 @@ impl Store {
 
     /// The transcriber's energy gate judged the audio too quiet and skipped inference: the job
     /// is done and the event `empty`, with `QUIET_AUDIO_NOTE` as its note. Such audio was never
-    /// actually transcribed, so delete-after-transcription keeps it (see
-    /// `expire_audio_events_before`); age-based retention still applies.
+    /// actually transcribed, so delete-after-transcription keeps it for `QUIET_AUDIO_GRACE_MS`
+    /// to listen or retry, then expires it (see `expire_audio_events_before`); age-based
+    /// retention applies as usual.
     pub fn save_untranscribed_quiet(
         &self,
         event_id: Uuid,
@@ -520,33 +524,34 @@ impl Store {
     /// retry. Transcripts are kept. Returns validated absolute paths to unlink.
     pub fn expire_audio_before(&self, cutoff: i64) -> Result<Vec<PathBuf>> {
         Ok(self
-            .expire_audio_events_before(cutoff, false)?
+            .expire_audio_events_before(cutoff, cutoff)?
             .into_iter()
             .filter_map(|(_, path)| path)
             .collect())
     }
 
     /// `expire_audio_before`, returning each expired event id with its validated path (None
-    /// if the stored path was invalid; the reference is cleared either way). `keep_quiet`
-    /// additionally keeps audio the energy gate never transcribed (`save_untranscribed_quiet`),
-    /// for delete-after-transcription. One bounded UPDATE; no history is loaded.
+    /// if the stored path was invalid; the reference is cleared either way). Audio the energy
+    /// gate never transcribed (`save_untranscribed_quiet`) uses `quiet_cutoff` instead, so
+    /// delete-after-transcription can keep it for a bounded grace period. One bounded UPDATE;
+    /// no history is loaded.
     pub fn expire_audio_events_before(
         &self,
         cutoff: i64,
-        keep_quiet: bool,
+        quiet_cutoff: i64,
     ) -> Result<Vec<(Uuid, Option<PathBuf>)>> {
-        // ?1 cutoff, ?2 keep_quiet, ?3 quiet note. Internal SQL; values are bound.
+        // ?1 cutoff, ?2 quiet cutoff, ?3 quiet note. Internal SQL; values are bound.
         const ELIGIBLE: &str = "FROM audio_assets a JOIN audio_events e ON e.asset_id = a.id
-             WHERE a.rel_path IS NOT NULL AND a.expired_at IS NULL AND e.ended_at < ?1
+             WHERE a.rel_path IS NOT NULL AND a.expired_at IS NULL
              AND e.status IN ('done', 'empty')
-             AND NOT (?2 AND e.status = 'empty' AND e.error IS ?3)";
+             AND e.ended_at < CASE WHEN e.status = 'empty' AND e.error IS ?3 THEN ?2 ELSE ?1 END";
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let expired = {
             // Capture ids and paths before clearing the references in the same transaction.
             let mut select = tx.prepare(&format!("SELECT e.id, a.rel_path {ELIGIBLE}"))?;
             let expired = select
-                .query_map(params![cutoff, keep_quiet, QUIET_AUDIO_NOTE], |row| {
+                .query_map(params![cutoff, quiet_cutoff, QUIET_AUDIO_NOTE], |row| {
                     Ok((
                         read::uuid(row, 0)?,
                         paths::stored(&self.data_dir, &row.get::<_, String>(1)?),
@@ -558,7 +563,7 @@ impl Store {
                     "UPDATE audio_assets SET rel_path = NULL, expired_at = ?4
                      WHERE id IN (SELECT a.id {ELIGIBLE})"
                 ),
-                params![cutoff, keep_quiet, QUIET_AUDIO_NOTE, now_ms()],
+                params![cutoff, quiet_cutoff, QUIET_AUDIO_NOTE, now_ms()],
             )?;
             expired
         };

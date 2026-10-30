@@ -7,7 +7,7 @@ use crate::segmenter::{FRAME_SAMPLES, Segmenter, SegmenterConfig, SpeechSegment}
 
 /// Frames per VAD call (8 x 32 ms = 256 ms).
 pub(crate) const VAD_BLOCK_FRAMES: usize = 8;
-use crate::storage::{NewAudio, NewEvent};
+use crate::storage::{NewAudio, NewEvent, QUIET_AUDIO_GRACE_MS};
 use crate::vad::{SpeechDetector, best_detector};
 use crossbeam_channel::{Receiver, TrySendError};
 use std::collections::{HashMap, VecDeque};
@@ -1063,7 +1063,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                         Ok(event) => {
                             shared.emit(EngineEvent::EventUpserted(event));
                             // Quiet audio skipped by the energy gate was never transcribed:
-                            // keep it (age-based retention still applies).
+                            // the housekeeping sweep expires it after QUIET_AUDIO_GRACE_MS.
                             if !untranscribed
                                 && shared.settings.lock().retention
                                     == Retention::DeleteAfterTranscription
@@ -1144,20 +1144,24 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
 /// (outside the persist gate).
 fn retain(shared: &Shared) -> Vec<Uuid> {
     let policy = shared.settings.lock().retention;
-    let (cutoff, keep_quiet) = match policy {
-        // Quiet audio the energy gate never transcribed is not "transcribed" audio.
-        Retention::DeleteAfterTranscription => (i64::MAX, true),
+    let now = chrono::Local::now().timestamp_millis();
+    let (cutoff, quiet_cutoff) = match policy {
+        // Quiet audio the energy gate never transcribed is not "transcribed" audio: keep it
+        // for a grace period to listen or retry, then let it go like the rest.
+        Retention::DeleteAfterTranscription => {
+            (i64::MAX, now.saturating_sub(QUIET_AUDIO_GRACE_MS))
+        }
         policy => match policy.max_age_ms() {
             // Store protects queued, running and failed audio from expiration.
-            Some(age) => (
-                chrono::Local::now().timestamp_millis().saturating_sub(age),
-                false,
-            ),
+            Some(age) => {
+                let cutoff = now.saturating_sub(age);
+                (cutoff, cutoff)
+            }
             None => return Vec::new(),
         },
     };
     let _gate = shared.persist_gate.lock();
-    match shared.store.expire_audio_events_before(cutoff, keep_quiet) {
+    match shared.store.expire_audio_events_before(cutoff, quiet_cutoff) {
         Ok(expired) => {
             // Unlink every file (no short-circuit); report failures once.
             let failures = expired
