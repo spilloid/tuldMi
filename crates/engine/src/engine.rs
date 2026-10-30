@@ -282,7 +282,7 @@ impl Engine {
             .shared
             .store
             .delete_event(id)?
-            .map(|path| unlink(&path))
+            .map(|path| self.shared.discard_audio(&path))
             .transpose();
         self.shared.emit(EngineEvent::EventDeleted(id));
         self.shared.refresh_backlog();
@@ -295,7 +295,7 @@ impl Engine {
             .shared
             .store
             .expire_event_audio(id)?
-            .map(|path| unlink(&path))
+            .map(|path| self.shared.discard_audio(&path))
             .transpose();
         self.shared.upsert(id)?;
         removed?;
@@ -312,7 +312,7 @@ impl Engine {
         let events = self.shared.store.list_events(None, u32::MAX)?;
         let mut removal_error = None;
         for path in self.shared.store.delete_all_history()? {
-            if let Err(error) = unlink(&path) {
+            if let Err(error) = self.shared.discard_audio(&path) {
                 removal_error = Some(error);
             }
         }
