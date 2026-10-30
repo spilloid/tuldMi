@@ -103,14 +103,25 @@ impl Shared {
     pub fn discard_audio(&self, path: &Path) -> Result<()> {
         let result = unlink(path);
         if result.is_err() {
-            self.unlink_retry.lock().push(path.to_path_buf());
+            let mut pending = self.unlink_retry.lock();
+            if !pending.iter().any(|p| p == path) {
+                pending.push(path.to_path_buf());
+            }
         }
         result
     }
     /// Retry removals `discard_audio` could not finish. Returns how many are still pending.
+    /// The filesystem work runs outside the lock, so a slow sweep never stalls a writer
+    /// recording a new failure.
     pub fn retry_discarded_audio(&self) -> usize {
+        let batch = std::mem::take(&mut *self.unlink_retry.lock());
+        let failed: Vec<PathBuf> = batch.into_iter().filter(|path| unlink(path).is_err()).collect();
         let mut pending = self.unlink_retry.lock();
-        pending.retain(|path| unlink(path).is_err());
+        for path in failed {
+            if !pending.contains(&path) {
+                pending.push(path);
+            }
+        }
         pending.len()
     }
     pub fn notice(&self, message: &str) {

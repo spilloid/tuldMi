@@ -2,7 +2,7 @@
 
 All notable changes to tuldMi are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.1.1] — 2026-10-30
 
 ### Fixed
 
@@ -11,9 +11,10 @@ All notable changes to tuldMi are documented here. Format: [Keep a Changelog](ht
 - Audio Windows refused to delete (another program holding the file) was forgotten until the
   next start. It is now retried every 30 seconds.
 - Under "delete after transcription", audio of clips too quiet to transcribe was kept forever.
-  It is now removed 24 hours after recording (time to play or retry it). The 7- and 30-day
-  settings already treated it like other audio. Audio still waiting to be transcribed is never
-  removed.
+  It is now removed 24 hours after recording (time to play it; retention checks every 10
+  minutes). Clips kept by v0.1.0 are removed at the first check. The timeline now marks them
+  "Too quiet to transcribe". The 7- and 30-day settings already treated it like other audio.
+  Audio still waiting to be transcribed is never removed.
 
 ## [0.1.0] — 2026-10-24
 
