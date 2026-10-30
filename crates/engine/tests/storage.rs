@@ -349,3 +349,32 @@ fn deleted_transcripts_do_not_linger_in_database_files() {
         }
     }
 }
+
+#[test]
+fn quiet_audio_expires_after_its_grace_period_and_untranscribed_audio_never_does() {
+    let (dir, s) = store();
+    let sess = s.start_session(0).unwrap();
+    let old_quiet = event(&s, dir.path(), &sess, Source::System, 1_000);
+    let new_quiet = event(&s, dir.path(), &sess, Source::System, 100_000);
+    let queued = event(&s, dir.path(), &sess, Source::Mic, 2_000);
+    let done = event(&s, dir.path(), &sess, Source::Mic, 3_000);
+    s.save_untranscribed_quiet(old_quiet.id, None, "whisper-base.en").unwrap();
+    s.save_untranscribed_quiet(new_quiet.id, None, "whisper-base.en").unwrap();
+    transcribe(&s, done.id, "words");
+    assert_eq!(s.get_event(old_quiet.id).unwrap().unwrap().error.as_deref(), Some(QUIET_AUDIO_NOTE));
+
+    // Delete-after-transcription: transcribed audio goes at once, quiet audio after its grace.
+    let mut expired: Vec<_> = s.expire_audio_events_before(i64::MAX, 50_000).unwrap().into_iter().map(|(id, _)| id).collect();
+    expired.sort();
+    let mut want = vec![old_quiet.id, done.id];
+    want.sort();
+    assert_eq!(expired, want, "quiet audio past its grace period must not be kept forever");
+    assert!(s.get_event(new_quiet.id).unwrap().unwrap().audio.is_some(), "quiet audio inside its grace period is kept");
+    assert!(s.get_event(queued.id).unwrap().unwrap().audio.is_some(), "audio still waiting to be transcribed must never expire");
+
+    // Age-based retention treats quiet audio like any other finished audio.
+    let paths = s.expire_audio_before(i64::MAX).unwrap();
+    assert_eq!(paths.len(), 1);
+    assert!(paths[0].ends_with("100000-system.ogg"));
+    assert!(s.get_event(queued.id).unwrap().unwrap().audio.is_some());
+}
