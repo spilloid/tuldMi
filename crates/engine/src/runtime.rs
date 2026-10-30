@@ -24,6 +24,9 @@ pub(super) struct Shared {
     pub wake: Sender<()>,
     pub persist_gate: Mutex<()>,
     published: Mutex<(Instant, Option<CaptureStatus>)>,
+    /// Audio files whose database reference is already gone but which could not be removed
+    /// yet (see `discard_audio`).
+    unlink_retry: Mutex<Vec<PathBuf>>,
     wall: WallAnchor,
 }
 impl Shared {
@@ -68,6 +71,7 @@ impl Shared {
             wake,
             persist_gate: Mutex::new(()),
             published: Mutex::new((Instant::now() - Duration::from_secs(1), None)),
+            unlink_retry: Mutex::new(Vec::new()),
             wall: WallAnchor::now(),
         })
     }
@@ -81,13 +85,33 @@ impl Shared {
         // Dedupe only. A time throttle here dropped the *last* change of a quick burst
         // (e.g. Starting -> Recording within 100 ms) with no trailing publish, leaving the
         // UI and tray showing a stale state. Status changes are infrequent; send each one.
-        let status = self.status.lock().clone();
+        // Snapshot, dedupe and enqueue all happen under `published`: snapshotting first, or
+        // emitting after releasing it, let an older snapshot (e.g. Paused) be emitted after a
+        // newer one (Recording), and dedupe then suppressed the correction. The dispatcher's
+        // status slot is latest-wins and never blocks, so holding the lock here is cheap.
         let mut published = self.published.lock();
+        let status = self.status.lock().clone();
         if published.1.as_ref() != Some(&status) {
             *published = (Instant::now(), Some(status.clone()));
-            drop(published);
             self.emit(EngineEvent::Status(status));
         }
+    }
+    /// Remove audio whose database reference is already gone. Windows refuses the delete
+    /// while another process holds the file; the path is then kept and retried by
+    /// housekeeping, so the recording can't outlive its reference until the next start's
+    /// orphan sweep.
+    pub fn discard_audio(&self, path: &Path) -> Result<()> {
+        let result = unlink(path);
+        if result.is_err() {
+            self.unlink_retry.lock().push(path.to_path_buf());
+        }
+        result
+    }
+    /// Retry removals `discard_audio` could not finish. Returns how many are still pending.
+    pub fn retry_discarded_audio(&self) -> usize {
+        let mut pending = self.unlink_retry.lock();
+        pending.retain(|path| unlink(path).is_err());
+        pending.len()
     }
     pub fn notice(&self, message: &str) {
         tracing::warn!(message, "engine notice");
@@ -890,7 +914,7 @@ fn persist_segment(
     let mut event = match inserted {
         Ok(event) => event,
         Err(error) => {
-            let _ = unlink(&path);
+            let _ = shared.discard_audio(&path);
             return Err(error);
         }
     };
@@ -1071,7 +1095,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                                 match shared.store.expire_event_audio(job.event_id) {
                                     Ok(path) => {
                                         if let Some(path) = path
-                                            && unlink(&path).is_err()
+                                            && shared.discard_audio(&path).is_err()
                                         {
                                             shared.notice("could not remove transcribed audio");
                                         }
@@ -1167,7 +1191,7 @@ fn retain(shared: &Shared) -> Vec<Uuid> {
             let failures = expired
                 .iter()
                 .filter_map(|(_, path)| path.as_deref())
-                .filter(|path| unlink(path).is_err())
+                .filter(|path| shared.discard_audio(path).is_err())
                 .count();
             if failures > 0 {
                 shared.notice("could not remove some expired audio");
@@ -1196,7 +1220,12 @@ pub(super) fn housekeeping(
     announce(&shared, retain(&shared));
     let mut last_retention = Instant::now();
     let mut last_recovery = Instant::now();
+    let mut last_unlink_retry = Instant::now();
     while !shared.quit.load(Ordering::Acquire) {
+        if last_unlink_retry.elapsed() >= Duration::from_secs(30) {
+            shared.retry_discarded_audio();
+            last_unlink_retry = Instant::now();
+        }
         if last_recovery.elapsed() >= Duration::from_secs(3) {
             match commands.try_send(Command::Recover) {
                 Ok(()) | Err(TrySendError::Full(_)) => (),

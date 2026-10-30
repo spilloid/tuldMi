@@ -6,6 +6,11 @@ All notable changes to tuldMi are documented here. Format: [Keep a Changelog](ht
 
 ### Fixed
 
+- The tray and window could show **Paused** while recording: two status updates racing could
+  deliver the older one last, and the newer one was then never resent.
+- Audio Windows refused to delete (another program holding the file) was forgotten until the
+  next start. It is now retried every 30 seconds.
+
 - Under "delete after transcription", audio of clips too quiet to transcribe was kept forever.
   It is now removed 24 hours after recording (time to play or retry it). The 7- and 30-day
   settings already treated it like other audio. Audio still waiting to be transcribed is never

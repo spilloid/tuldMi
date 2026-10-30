@@ -300,3 +300,97 @@ fn energy_vad_splits_fixture_at_real_silence() -> Result<()> {
     assert_eq!(events.len(), 2, "speech split into durations {durations:?}");
     Ok(())
 }
+
+/// Holds a `Paused` status inside `emit` until another status is published (or 300 ms
+/// pass), reproducing a publisher suspended between taking its snapshot and emitting it.
+struct StallPaused {
+    events: Mutex<Vec<CaptureState>>,
+    other_published: (std::sync::Mutex<bool>, std::sync::Condvar),
+}
+impl EventSink for StallPaused {
+    fn emit(&self, event: EngineEvent) {
+        let EngineEvent::Status(status) = event else { return };
+        if status.state == CaptureState::Paused {
+            let (lock, cvar) = &self.other_published;
+            let guard = lock.lock().unwrap();
+            let _ = cvar.wait_timeout_while(guard, Duration::from_millis(300), |seen| !*seen);
+        } else {
+            *self.other_published.0.lock().unwrap() = true;
+            self.other_published.1.notify_all();
+        }
+        self.events.lock().push(status.state);
+    }
+}
+
+#[test]
+fn a_stale_paused_status_is_never_published_after_recording() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let store = Arc::new(Store::open(dir.path())?);
+    let settings = store.load_settings()?;
+    let sink = Arc::new(StallPaused {
+        events: Mutex::new(Vec::new()),
+        other_published: (std::sync::Mutex::new(false), std::sync::Condvar::new()),
+    });
+    let (wake, _waking) = crossbeam_channel::bounded(1);
+    let shared = Arc::new(Shared::new(
+        EngineConfig { data_dir: dir.path().into(), vad_model_path: None, suppress_autostart: true },
+        store,
+        sink.clone(),
+        Arc::new(FakeProvider::new()),
+        settings,
+        wake,
+    )?);
+
+    shared.status.lock().state = CaptureState::Paused;
+    let pausing = {
+        let shared = shared.clone();
+        std::thread::spawn(move || shared.publish())
+    };
+    // Let the Paused publisher reach the sink, then resume and publish Recording.
+    std::thread::sleep(Duration::from_millis(50));
+    shared.status.lock().state = CaptureState::Recording;
+    shared.publish();
+    pausing.join().unwrap();
+    shared.publish();
+
+    let events = sink.events.lock().clone();
+    assert_eq!(
+        events.last(),
+        Some(&CaptureState::Recording),
+        "the last status published must match the engine's state, got {events:?}"
+    );
+    Ok(())
+}
+
+/// Windows refuses a delete while another handle lacks FILE_SHARE_DELETE. Audio whose
+/// reference is already gone must not be forgotten when that happens.
+#[cfg(windows)]
+#[test]
+fn audio_that_cannot_be_removed_yet_is_retried_until_it_is() -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let dir = tempfile::tempdir()?;
+    let store = Arc::new(Store::open(dir.path())?);
+    let settings = store.load_settings()?;
+    let (wake, _waking) = crossbeam_channel::bounded(1);
+    let shared = Shared::new(
+        EngineConfig { data_dir: dir.path().into(), vad_model_path: None, suppress_autostart: true },
+        store,
+        Arc::new(Collect::default()),
+        Arc::new(FakeProvider::new()),
+        settings,
+        wake,
+    )?;
+    let path = dir.path().join("held.ogg");
+    std::fs::write(&path, b"OggS fake")?;
+    const FILE_SHARE_READ: u32 = 1;
+    let held = std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(&path)?;
+
+    assert!(shared.discard_audio(&path).is_err(), "the held file should refuse deletion");
+    assert_eq!(shared.retry_discarded_audio(), 1, "still held, still pending");
+    assert!(path.exists());
+
+    drop(held);
+    assert_eq!(shared.retry_discarded_audio(), 0);
+    assert!(!path.exists(), "the retry must remove the file once it is released");
+    Ok(())
+}
