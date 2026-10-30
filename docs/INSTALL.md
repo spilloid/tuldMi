@@ -4,7 +4,7 @@ title: Install and first run
 
 # Install and first run
 
-tuldMi runs on **Windows 10 and 11 (x64)**. macOS and Linux are not supported yet.
+tuldMi runs on **Windows 11 (x64)**. Windows 10 is unverified: it should work, but it hasn't been tested. macOS and Linux are not supported yet.
 
 ## 1. Download
 
