@@ -196,6 +196,12 @@ function EventBody({ ev, onRetry }: { ev: SpeechEvent; onRetry: () => void }) {
     );
   }
   if (ev.status === "empty") {
+    // The engine marks audio its energy gate skipped with QUIET_AUDIO_NOTE. Retrying would be
+    // gated the same way, so say what happened; the audio stays playable until retention
+    // removes it.
+    if (isQuiet(ev)) {
+      return <p className="py-0.5 text-base italic text-faint">Too quiet to transcribe · {humanDuration(dur)}</p>;
+    }
     return <p className="py-0.5 text-base italic text-faint">No words recognized · {humanDuration(dur)}</p>;
   }
   return <p className="selectable text-read text-text [text-wrap:pretty]">{eventText(ev)}</p>;
@@ -270,4 +276,10 @@ function EventDetail({ ev, avail }: { ev: SpeechEvent; avail: ReturnType<typeof 
       </div>
     </div>
   );
+}
+
+/** Matches the engine's `QUIET_AUDIO_NOTE`. */
+const QUIET_AUDIO_NOTE = "Too quiet to transcribe; audio kept";
+function isQuiet(ev: SpeechEvent): boolean {
+  return ev.error === QUIET_AUDIO_NOTE;
 }

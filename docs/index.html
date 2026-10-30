@@ -40,13 +40,13 @@
         <div class="hero-copy">
           <p class="lead">tuldMi sits quietly in your tray, keeps only the <em>speech</em> from your microphone and your computer&rsquo;s audio, and transcribes it right on your PC. The detail from Tuesday&rsquo;s call is a few keystrokes away, and none of it ever leaves your device.</p>
           <div class="actions">
-            <a class="button primary" href="https://github.com/spilloid/tuldMi/releases/tag/v0.1.0">
+            <a class="button primary" href="https://github.com/spilloid/tuldMi/releases/tag/v0.1.1">
               <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
               Download for Windows
             </a>
             <a class="button ghost" href="#privacy">What stays private <span aria-hidden="true">&rarr;</span></a>
           </div>
-          <p class="hero-meta">v0.1.0 &middot; Windows 10/11 x64 &middot; signed 7&nbsp;MB installer &middot; MIT licensed</p>
+          <p class="hero-meta">v0.1.1 &middot; Windows 11 x64 &middot; signed 7&nbsp;MB installer &middot; MIT licensed</p>
           <div class="consent" role="note">
             <span class="consent-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 3 4.5 6v5.5c0 4.6 3.1 8 7.5 9.5 4.4-1.5 7.5-4.9 7.5-9.5V6L12 3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 8v4.5M12 15.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -221,7 +221,7 @@
         </div>
         <div class="honest">
           <span class="honest-icon" aria-hidden="true">!</span>
-          <p><strong>Not yet: encryption at rest.</strong> In v0.1.0 the database and audio are protected by your Windows account and disk encryption (such as BitLocker) only, so anyone who can sign in as you can read them. Database and audio encryption with OS-keychain keys is planned, and tuldMi won&rsquo;t show an &ldquo;encrypted&rdquo; switch until it really protects your data.</p>
+          <p><strong>Not yet: encryption at rest.</strong> In v0.1.1 the database and audio are protected by your Windows account and disk encryption (such as BitLocker) only, so anyone who can sign in as you can read them. Database and audio encryption with OS-keychain keys is planned, and tuldMi won&rsquo;t show an &ldquo;encrypted&rdquo; switch until it really protects your data.</p>
         </div>
         <p class="fineprint">This page keeps the same promise: no trackers, no analytics, and no third-party fonts or scripts. <a href="PRIVACY.html">The full privacy document <span aria-hidden="true">&rarr;</span></a></p>
       </div>
@@ -247,7 +247,7 @@
     <section class="section band" aria-labelledby="limits-title">
       <div class="wrap limits">
         <div>
-          <p class="eyebrow">Honest about v0.1.0</p>
+          <p class="eyebrow">Honest about v0.1.1</p>
           <h2 id="limits-title">What it doesn&rsquo;t<br><em>do yet.</em></h2>
         </div>
         <ul>
@@ -268,19 +268,20 @@
       </div>
       <div class="install">
         <ol class="install-steps">
-          <li><h3>Download</h3><p><code>tuldMi_0.1.0_x64-setup.exe</code> and its <code>.sha256</code> from the release page.</p></li>
+          <li><h3>Download</h3><p><code>tuldMi_0.1.1_x64-setup.exe</code> and its <code>.sha256</code> from the release page.</p></li>
           <li><h3>Check it (optional)</h3><p>The signature should be <code>Valid</code> and signed by <code>CN=Joseph Spillers</code>. As a new publisher, SmartScreen may still ask before the first run.</p></li>
           <li><h3>Run it, then follow setup</h3><p>Pick your devices, try the live level test, and download a model. That&rsquo;s it: tuldMi is listening from the tray.</p></li>
         </ol>
         <div class="install-side">
 <pre class="verify" aria-label="PowerShell commands to verify the download"><span class="c"># in your Downloads folder</span>
-Get-AuthenticodeSignature .\tuldMi_0.1.0_x64-setup.exe
-Get-FileHash .\tuldMi_0.1.0_x64-setup.exe</pre>
-          <a class="button primary wide" href="https://github.com/spilloid/tuldMi/releases/tag/v0.1.0">Get tuldMi 0.1.0 for Windows <span aria-hidden="true">&darr;</span></a>
+Get-AuthenticodeSignature .\tuldMi_0.1.1_x64-setup.exe
+Get-FileHash .\tuldMi_0.1.1_x64-setup.exe</pre>
+          <a class="button primary wide" href="https://github.com/spilloid/tuldMi/releases/tag/v0.1.1">Get tuldMi 0.1.1 for Windows <span aria-hidden="true">&darr;</span></a>
           <table class="platforms">
             <caption class="sr-only">Platform support</caption>
             <tbody>
-              <tr><th scope="row">Windows 10/11 x64</th><td class="yes">Supported</td></tr>
+              <tr><th scope="row">Windows 11 x64</th><td class="yes">Supported</td></tr>
+              <tr><th scope="row">Windows 10 x64</th><td>Unverified</td></tr>
               <tr><th scope="row">macOS</th><td>Not yet</td></tr>
               <tr><th scope="row">Linux</th><td>Not yet</td></tr>
             </tbody>

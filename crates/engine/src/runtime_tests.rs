@@ -306,11 +306,15 @@ fn energy_vad_splits_fixture_at_real_silence() -> Result<()> {
 struct StallPaused {
     events: Mutex<Vec<CaptureState>>,
     other_published: (std::sync::Mutex<bool>, std::sync::Condvar),
+    /// Set once the Paused publisher is inside `emit`.
+    stalled: (std::sync::Mutex<bool>, std::sync::Condvar),
 }
 impl EventSink for StallPaused {
     fn emit(&self, event: EngineEvent) {
         let EngineEvent::Status(status) = event else { return };
         if status.state == CaptureState::Paused {
+            *self.stalled.0.lock().unwrap() = true;
+            self.stalled.1.notify_all();
             let (lock, cvar) = &self.other_published;
             let guard = lock.lock().unwrap();
             let _ = cvar.wait_timeout_while(guard, Duration::from_millis(300), |seen| !*seen);
@@ -330,6 +334,7 @@ fn a_stale_paused_status_is_never_published_after_recording() -> Result<()> {
     let sink = Arc::new(StallPaused {
         events: Mutex::new(Vec::new()),
         other_published: (std::sync::Mutex::new(false), std::sync::Condvar::new()),
+        stalled: (std::sync::Mutex::new(false), std::sync::Condvar::new()),
     });
     let (wake, _waking) = crossbeam_channel::bounded(1);
     let shared = Arc::new(Shared::new(
@@ -346,8 +351,15 @@ fn a_stale_paused_status_is_never_published_after_recording() -> Result<()> {
         let shared = shared.clone();
         std::thread::spawn(move || shared.publish())
     };
-    // Let the Paused publisher reach the sink, then resume and publish Recording.
-    std::thread::sleep(Duration::from_millis(50));
+    // Wait until the Paused publisher is stalled inside the sink, then resume and publish
+    // Recording. If it never got there the test would prove nothing, so fail.
+    {
+        let (lock, cvar) = &sink.stalled;
+        let (reached, _) = cvar
+            .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(5), |reached| !*reached)
+            .unwrap();
+        assert!(*reached, "the Paused publisher never reached the sink");
+    }
     shared.status.lock().state = CaptureState::Recording;
     shared.publish();
     pausing.join().unwrap();

@@ -40,11 +40,14 @@ Settings → Privacy & data → *Open data folder* takes you there.
   30 days (default), or keep forever. Audio still waiting to be transcribed is never deleted by
   retention.
 - **Exception: clips too quiet to transcribe.** When a clip is too quiet for the transcriber to
-  try, it has no transcript, so "delete right after transcription" doesn't apply to it. **In
-  v0.1.0 that audio is kept until you delete it**, including any quiet speech from the other side
-  of a call. The next release removes it 24 hours after recording. The 7- and 30-day settings
-  already remove it on schedule. Such clips show "Too quiet to transcribe; audio kept" in the
-  timeline, where you can delete them.
+  try, it has no transcript, so "delete right after transcription" doesn't remove it at once.
+  Since v0.1.1 it is removed 24 hours after recording (retention is checked every 10 minutes, so
+  allow a few minutes more), which leaves time to play it. **v0.1.0 kept that audio until you
+  deleted it**, including any quiet speech from the other side of a call; installing v0.1.1
+  removes those older clips at its first check. The 7- and 30-day settings treat these clips like
+  any other audio. They show as "Too quiet to transcribe" in the timeline, where you can delete
+  them sooner.
+- Retention runs every 10 minutes, so audio can outlive its setting by up to that long.
 - You can delete one conversation's audio, one conversation entirely, or all history
   (Settings → Privacy & data). Deletion removes the database rows and the audio files.
 
