@@ -1,8 +1,7 @@
 import { isMac } from "../../lib/platform";
 
 /** Human labels for accelerator tokens ("CommandOrControl+Shift+Backquote" -> Ctrl ⇧ `). */
-export function acceleratorParts(combo: string): string[] {
-  const mac = isMac();
+export function acceleratorParts(combo: string, mac = isMac()): string[] {
   return combo
     .split("+")
     .filter(Boolean)
