@@ -41,7 +41,7 @@ playable timeline of what was said. Nothing leaves your device.
 No accounts, no telemetry, no cloud. The only network request tuldMi ever makes is downloading a
 transcription model you explicitly choose, verified by SHA-256. Recording conversations is
 regulated — you are responsible for consent laws and workplace policy. Full details, including
-what is **not** yet protected (no encryption at rest in v0.1.0): [docs/PRIVACY.md](docs/PRIVACY.md).
+what is **not** yet protected (no encryption at rest yet): [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Platforms
 
