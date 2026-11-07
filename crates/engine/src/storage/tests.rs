@@ -401,3 +401,67 @@ fn dangling_sessions_use_the_last_event_end_or_the_session_start() -> Result<()>
     assert_eq!(store.close_dangling_sessions()?, 0);
     Ok(())
 }
+
+#[test]
+fn read_only_store_reads_filters_and_never_writes() -> Result<()> {
+    let (directory, store) = setup()?;
+    let session = store.start_session(0)?;
+    let me = insert(&store, &session, 1_000, None)?;
+    let remote = store.insert_event(&NewEvent {
+        session_id: session.id,
+        source: Source::System,
+        started_at: 2_000,
+        ended_at: 2_100,
+        audio: None,
+    })?;
+    store.save_transcript(me.id, &[NewSegment { start_ms: 0, end_ms: 100, text: "send the deck".into(), confidence: None }], Some("en"), "tiny")?;
+    store.save_transcript(remote.id, &[NewSegment { start_ms: 0, end_ms: 100, text: "the deck is late".into(), confidence: None }], Some("en"), "tiny")?;
+
+    let reader = Store::open_read_only(directory.path())?;
+    let all = |sources: Vec<Source>, from: Option<i64>| EventFilter { from, to: None, sources, newest_first: true, limit: 10 };
+    let ids = |events: Vec<SpeechEvent>| events.into_iter().map(|e| e.id).collect::<Vec<_>>();
+    assert_eq!(ids(reader.events_matching(&all(vec![], None))?), vec![remote.id, me.id]);
+    assert_eq!(ids(reader.events_matching(&all(vec![Source::Mic], None))?), vec![me.id]);
+    assert_eq!(ids(reader.events_matching(&all(vec![], Some(1_500)))?), vec![remote.id]);
+    let oldest_first = EventFilter { newest_first: false, ..all(vec![], None) };
+    assert_eq!(ids(reader.events_matching(&oldest_first)?), vec![me.id, remote.id]);
+    assert_eq!(reader.event_summary(None, &[Source::Mic])?, (1, Some(1_000)));
+    assert_eq!(reader.event_summary(Some(5_000), &[])?, (0, None));
+    // Search works read-only (its tokenizer lives in TEMP tables) and honours the source filter.
+    let hits = reader.search(&SearchQuery { text: "deck".into(), sources: vec![Source::Mic], from: None, to: None, limit: None })?;
+    assert_eq!(hits.iter().map(|h| h.event_id).collect::<Vec<_>>(), vec![me.id]);
+    // The app's later writes are visible.
+    insert(&store, &session, 3_000, None)?;
+    assert_eq!(reader.event_summary(None, &[])?.0, 3);
+    // Nothing can be written through it.
+    assert!(reader.save_settings(&Settings::default()).is_err());
+    assert!(reader.start_session(4_000).is_err());
+    Ok(())
+}
+
+#[test]
+fn read_only_store_needs_an_existing_current_history() -> Result<()> {
+    let empty = tempfile::tempdir()?;
+    assert!(Store::open_read_only(empty.path()).is_err());
+    assert!(!empty.path().join("tuldmi.db").exists(), "must not create a database");
+    let (directory, store) = setup()?;
+    store.connection.lock().pragma_update(None, "user_version", LATEST_SCHEMA + 1)?;
+    assert!(Store::open_read_only(directory.path()).is_err());
+    store.connection.lock().pragma_update(None, "user_version", LATEST_SCHEMA - 1)?;
+    assert!(Store::open_read_only(directory.path()).is_err());
+    Ok(())
+}
+
+#[test]
+fn settings_without_mcp_load_with_access_off() -> Result<()> {
+    let (_directory, store) = setup()?;
+    store.connection.lock().execute(
+        "INSERT INTO settings (key, value) VALUES ('settings', '{\"onboardingComplete\": true}')",
+        [],
+    )?;
+    let settings = store.load_settings()?;
+    assert!(settings.onboarding_complete);
+    assert_eq!(settings.mcp, McpSettings::default());
+    assert!(!settings.mcp.enabled && !settings.mcp.include_remote && !settings.mcp.allow_audio);
+    Ok(())
+}

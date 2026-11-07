@@ -330,6 +330,31 @@ pub struct Settings {
     /// Tauri accelerator string.
     pub pause_shortcut: String,
     pub theme: Theme,
+    /// What AI assistants may read through `tuldmi-mcp`. Off by default.
+    pub mcp: McpSettings,
+}
+
+/// The ceiling on `tuldmi-mcp` (docs/design/mcp.md), re-read by it on every request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct McpSettings {
+    pub enabled: bool,
+    /// Remote is other people's words, so it is a separate opt-in.
+    pub include_remote: bool,
+    pub allow_audio: bool,
+    /// Nothing older is returned; 0 = no limit.
+    pub max_age_days: u32,
+}
+
+impl Default for McpSettings {
+    fn default() -> Self {
+        McpSettings {
+            enabled: false,
+            include_remote: false,
+            allow_audio: false,
+            max_age_days: 30,
+        }
+    }
 }
 
 impl Default for Settings {
@@ -355,6 +380,7 @@ impl Default for Settings {
             }
             .into(),
             theme: Theme::System,
+            mcp: McpSettings::default(),
         }
     }
 }

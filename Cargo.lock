@@ -5166,6 +5166,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuldmi-mcp"
+version = "0.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "tuldmi-engine",
+ "uuid",
+]
+
+[[package]]
 name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
