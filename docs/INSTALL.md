@@ -4,7 +4,7 @@ title: Install and first run
 
 # Install and first run
 
-tuldMi runs on **Windows 11 (x64)** and, as a preview, on **macOS 14.4 or later on Apple Silicon**.
+tuldMi runs on **Windows 11 (x64)** and, as a preview, on **macOS 15.4 or later on Apple Silicon**.
 Windows 10 is unverified: it should work, but it hasn't been tested. Linux is not supported yet.
 On a Mac, skip to [macOS](#macos); the setup steps and everyday use are the same.
 
@@ -80,7 +80,7 @@ with the red button keeps it listening; click the Dock icon to bring the window 
 
 - tuldMi lives in the **system tray**. The icon shows whether it is recording, paused, or has a
   device problem.
-- **Pause** from the tray, the main window, or the global shortcut **Ctrl+Shift+`**. Paused means
+- **Pause** from the tray, the main window, or the global shortcut (**Ctrl+Shift+`** on Windows, **⌥⌘`** on a Mac). Paused means
   the devices are closed and nothing is captured.
 - **Closing the window keeps tuldMi listening.** The first time, it tells you so and offers to
   pause. Use **Quit tuldMi** in the tray menu to stop it completely.

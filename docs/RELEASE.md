@@ -10,6 +10,11 @@
    Windows, complete onboarding, speak into the mic and play audio through speakers, confirm
    both appear as Me/Remote events, are transcribed, are searchable, and play back; pause from
    the tray and the shortcut; close and reopen the window; quit and relaunch — history intact.
+   **macOS** (when the release includes it): the same on an Apple Silicon Mac with the CI disk
+   image, plus Open Anyway, both permission prompts (Microphone, System Audio Recording), a denied
+   permission (silent source, Settings hint) and granting it afterwards,
+   ⌥⌘` and the menu bar menu, Dock reopen and ⌘Q. Record what was checked in
+   `docs/dev-process.md`.
 5. Screenshots refreshed in `docs/screenshots/` (light + dark).
 6. `CHANGELOG.md` has the version's section; README limitations match reality.
 7. A release-gate adversarial review (Codex Astra, review-only) of the diff since the last tag,

@@ -16,6 +16,13 @@
 //!
 //! Opening talks to coreaudiod (and may trigger the permission prompt), so it runs on its own
 //! thread with a bounded wait, like the cpal provider; at most one open is in flight.
+//!
+//! The engine's capture channel is shared with whatever stream replaces this one, so the IOProc
+//! and the watcher never send to it directly. They send into a private channel, and a relay
+//! thread forwards to the engine. `stop` joins the relay (it makes no Core Audio calls, so this
+//! is quick); after that the private channel is disconnected, and even a callback that stalled
+//! mid-cycle can't reach the engine. Core Audio teardown then runs on a worker with a bounded
+//! wait, so a stalled coreaudiod doesn't hold up the processing thread.
 
 use super::*;
 use std::ffi::{CStr, c_void};
@@ -123,44 +130,82 @@ fn ns(key: &CStr) -> Retained<NSString> {
 const OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 /// A previous open that has not returned yet (a stalled coreaudiod call) blocks new ones.
 static OPENING: AtomicBool = AtomicBool::new(false);
+/// How long `stop` waits for Core Audio teardown before leaving it to finish in the background.
+const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// State shared with the IOProc. Lives in an `Arc` owned by `TapStream` until the IOProc is
 /// destroyed, so the raw pointer handed to Core Audio never dangles. If Core Audio fails to
 /// unregister the IOProc, the `Arc` is deliberately leaked (see `stop`).
 struct Ctx {
+    /// The private channel to this stream's relay (not the engine's channel).
     tx: Sender<CaptureMsg>,
     dropped: Arc<AtomicU64>,
     channels: usize,
     /// The IOProc forwards audio only while set. Set by `open` once the caller has accepted the
     /// stream; cleared by `stop` and by the watcher on failure.
     active: AtomicBool,
-    /// IOProc invocations between their `active` check and the end of their send. `disable`
-    /// waits for this to reach zero, so nothing is forwarded once it returns.
-    in_flight: AtomicU64,
     /// Set by the IOProc when the buffer layout stops matching `Opened`; the watcher reports it.
     format_changed: AtomicBool,
 }
 
 pub struct TapStream {
+    dropped: Arc<AtomicU64>,
+    /// The relay's stop signal and thread. Joined first in `stop`.
+    relay: Option<(Sender<()>, std::thread::JoinHandle<()>)>,
+    /// Everything Core Audio holds; released when this is dropped.
+    native: Native,
+}
+
+/// The tap, the aggregate device, the IOProc and the watcher. Dropping it releases them in
+/// order; `TapStream::stop` does that on a worker thread.
+struct Native {
     tap: AudioObjectID,
     aggregate: AudioObjectID,
     proc_id: AudioDeviceIOProcID,
     started: bool,
     ctx: Option<Arc<Ctx>>,
-    dropped: Arc<AtomicU64>,
     stop_watch: Option<Sender<()>>,
     watcher: Option<std::thread::JoinHandle<()>>,
 }
 
+impl Native {
+    fn is_released(&self) -> bool {
+        self.tap == 0 && self.aggregate == 0 && self.proc_id.is_none() && self.ctx.is_none() && self.watcher.is_none()
+    }
+}
+
 impl Ctx {
-    /// Stops forwarding. On return no IOProc invocation will send anything more, even one that
-    /// was already running: each one raises `in_flight` before checking `active` (both SeqCst).
-    /// Callbacks only `try_send`, so the wait is short; it is capped regardless.
-    fn disable(&self) {
-        self.active.store(false, Ordering::SeqCst);
-        let deadline = Instant::now() + Duration::from_millis(200);
-        while self.in_flight.load(Ordering::SeqCst) != 0 && Instant::now() < deadline {
-            std::thread::yield_now();
+    fn new(tx: Sender<CaptureMsg>, dropped: Arc<AtomicU64>, channels: usize) -> Self {
+        Ctx { tx, dropped, channels, active: AtomicBool::new(false), format_changed: AtomicBool::new(false) }
+    }
+}
+
+/// Forwards this stream's messages to the engine until `stop` signals (or drops) `stop_relay`.
+/// Audio is `try_send`: a full engine queue drops it, counted, like the callback edge. `Failed`
+/// waits for room, but never past the stop signal, and ends the relay: the stream is dead, so a
+/// buffer a callback was still copying is not passed on after it.
+fn relay(from: crossbeam_channel::Receiver<CaptureMsg>, to: Sender<CaptureMsg>, stop_relay: crossbeam_channel::Receiver<()>, dropped: Arc<AtomicU64>) {
+    loop {
+        let msg = crossbeam_channel::select! {
+            recv(stop_relay) -> _ => return,
+            recv(from) -> msg => match msg {
+                Ok(msg) => msg,
+                Err(_) => return,
+            },
+        };
+        match msg {
+            CaptureMsg::Failed { .. } => {
+                crossbeam_channel::select! {
+                    send(to, msg) -> _ => (),
+                    recv(stop_relay) -> _ => (),
+                }
+                return;
+            }
+            msg => {
+                if to.try_send(msg).is_err() {
+                    dropped.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         }
     }
 }
@@ -173,9 +218,41 @@ impl CaptureStream for TapStream {
         self.dropped.load(Ordering::Relaxed)
     }
     fn stop(&mut self) {
-        if let Some(ctx) = &self.ctx {
-            ctx.disable();
+        if let Some(ctx) = &self.native.ctx {
+            ctx.active.store(false, Ordering::SeqCst);
         }
+        // After this join nothing from this stream reaches the engine: the relay was its only
+        // way in, and its end of the private channel is gone, so a late send fails.
+        if let Some((stop_relay, handle)) = self.relay.take() {
+            let _ = stop_relay.try_send(());
+            drop(stop_relay);
+            if handle.join().is_err() {
+                tracing::error!("system audio relay panicked");
+            }
+        }
+        if self.native.is_released() {
+            return;
+        }
+        let native = std::mem::replace(
+            &mut self.native,
+            Native { tap: 0, aggregate: 0, proc_id: None, started: false, ctx: None, stop_watch: None, watcher: None },
+        );
+        // If the thread can't be spawned (out of resources), the closure and `native` with it
+        // are dropped right here: teardown then runs on this thread, without the deadline.
+        // Leaking instead would leave the tap running and macOS's recording indicator on.
+        let (done, finished) = crossbeam_channel::bounded::<()>(1);
+        let spawned = std::thread::Builder::new().name("tuldmi-tap-stop".into()).spawn(move || {
+            drop(native);
+            let _ = done.send(());
+        });
+        if spawned.is_ok() && finished.recv_timeout(STOP_TIMEOUT).is_err() {
+            tracing::warn!("system audio is still shutting down in the background");
+        }
+    }
+}
+
+impl Drop for Native {
+    fn drop(&mut self) {
         if let Some(stop) = self.stop_watch.take() {
             let _ = stop.try_send(());
         }
@@ -260,11 +337,9 @@ unsafe extern "C-unwind" fn io_proc(
     // SAFETY: `client` is `Arc::as_ptr` of the `Ctx` that `TapStream` keeps alive until this
     // IOProc is destroyed; only shared access happens here.
     let ctx = unsafe { &*(client as *const Ctx) };
-    ctx.in_flight.fetch_add(1, Ordering::SeqCst);
     if ctx.active.load(Ordering::SeqCst) {
         forward(ctx, input);
     }
-    ctx.in_flight.fetch_sub(1, Ordering::SeqCst);
     0
 }
 
@@ -328,7 +403,7 @@ pub fn open(tx: Sender<CaptureMsg>) -> Result<Box<dyn CaptureStream>> {
     match result.recv_timeout(OPEN_TIMEOUT) {
         Ok(built) => built.map(|stream| {
             // Forwarding starts only now, so a cancelled or abandoned open never delivers audio.
-            if let Some(ctx) = &stream.ctx {
+            if let Some(ctx) = &stream.native.ctx {
                 ctx.active.store(true, Ordering::SeqCst);
             }
             Box::new(stream) as Box<dyn CaptureStream>
@@ -343,15 +418,11 @@ pub fn open(tx: Sender<CaptureMsg>) -> Result<Box<dyn CaptureStream>> {
 fn build(tx: Sender<CaptureMsg>, cancelled: &AtomicBool) -> Result<TapStream> {
     let dropped = Arc::new(AtomicU64::new(0));
     let mut stream = TapStream {
-        tap: 0,
-        aggregate: 0,
-        proc_id: None,
-        started: false,
-        ctx: None,
         dropped: dropped.clone(),
-        stop_watch: None,
-        watcher: None,
+        relay: None,
+        native: Native { tap: 0, aggregate: 0, proc_id: None, started: false, ctx: None, stop_watch: None, watcher: None },
     };
+    let native = &mut stream.native;
     // Any early return drops `stream`, which releases whatever was created so far.
     let gave_up = || crate::Error::Device("system audio open cancelled".into());
 
@@ -365,9 +436,9 @@ fn build(tx: Sender<CaptureMsg>, cancelled: &AtomicBool) -> Result<TapStream> {
         description.setName(&NSString::from_str("tuldMi system audio"));
         description.setPrivate(true);
         let tap_uid = description.UUID().UUIDString();
-        check(AudioHardwareCreateProcessTap(Some(&description), &mut stream.tap), "creating the system audio tap")?;
+        check(AudioHardwareCreateProcessTap(Some(&description), &mut native.tap), "creating the system audio tap")?;
 
-        let format = get_property(stream.tap, kAudioTapPropertyFormat, std::mem::zeroed::<AudioStreamBasicDescription>())?;
+        let format = get_property(native.tap, kAudioTapPropertyFormat, std::mem::zeroed::<AudioStreamBasicDescription>())?;
         let channels = format.mChannelsPerFrame as usize;
         let non_interleaved = format.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0;
         let frame_bytes = if non_interleaved { 4 } else { 4 * format.mChannelsPerFrame };
@@ -409,13 +480,13 @@ fn build(tx: Sender<CaptureMsg>, cancelled: &AtomicBool) -> Result<TapStream> {
         // NSDictionary is toll-free bridged to CFDictionary.
         let cf = &*(Retained::as_ptr(&config) as *const CFDictionary);
         check(
-            AudioHardwareCreateAggregateDevice(cf, NonNull::from(&mut stream.aggregate)),
+            AudioHardwareCreateAggregateDevice(cf, NonNull::from(&mut native.aggregate)),
             "creating the system audio device",
         )?;
 
         // The IOProc runs at the aggregate's rate; it matches the tap's unless Core Audio says
         // otherwise. Both are watched for changes.
-        let aggregate_rate = get_property(stream.aggregate, kAudioDevicePropertyNominalSampleRate, 0f64)
+        let aggregate_rate = get_property(native.aggregate, kAudioDevicePropertyNominalSampleRate, 0f64)
             .ok()
             .filter(|r| plausible(*r));
         let rate = aggregate_rate.unwrap_or(format.mSampleRate);
@@ -424,24 +495,18 @@ fn build(tx: Sender<CaptureMsg>, cancelled: &AtomicBool) -> Result<TapStream> {
         }
         tracing::info!(tap_rate = format.mSampleRate, rate, channels, "system audio tap ready");
 
-        let ctx = Arc::new(Ctx {
-            tx: tx.clone(),
-            dropped: dropped.clone(),
-            channels,
-            active: AtomicBool::new(false),
-            in_flight: AtomicU64::new(0),
-            format_changed: AtomicBool::new(false),
-        });
+        let (private_tx, private_rx) = crossbeam_channel::bounded(CAPTURE_CHANNEL_CAPACITY);
+        let ctx = Arc::new(Ctx::new(private_tx, dropped.clone(), channels));
         check(
             AudioDeviceCreateIOProcID(
-                stream.aggregate,
+                native.aggregate,
                 Some(io_proc),
                 Arc::as_ptr(&ctx) as *mut c_void,
-                NonNull::from(&mut stream.proc_id),
+                NonNull::from(&mut native.proc_id),
             ),
             "registering the system audio callback",
         )?;
-        stream.ctx = Some(ctx.clone());
+        native.ctx = Some(ctx.clone());
 
         if cancelled.load(Ordering::Acquire) {
             return Err(gave_up());
@@ -455,16 +520,25 @@ fn build(tx: Sender<CaptureMsg>, cancelled: &AtomicBool) -> Result<TapStream> {
         })
         .map_err(|_| crate::Error::Device("capture queue full at open".into()))?;
 
-        check(AudioDeviceStart(stream.aggregate, stream.proc_id), "starting system audio capture")?;
-        stream.started = true;
+        // Before the IOProc starts, so it has somewhere to deliver from the first cycle.
+        let (stop_relay, relay_stopped) = crossbeam_channel::bounded::<()>(1);
+        let relay_dropped = dropped.clone();
+        let handle = std::thread::Builder::new()
+            .name("tuldmi-tap-relay".into())
+            .spawn(move || relay(private_rx, tx, relay_stopped, relay_dropped))?;
+        stream.relay = Some((stop_relay, handle));
+        let native = &mut stream.native;
+
+        check(AudioDeviceStart(native.aggregate, native.proc_id), "starting system audio capture")?;
+        native.started = true;
         if cancelled.load(Ordering::Acquire) {
             return Err(gave_up());
         }
 
         let (stop_watch, stopped) = crossbeam_channel::bounded::<()>(1);
-        let rates = Rates { aggregate: stream.aggregate, tap: stream.tap, advertised: rate, tap_rate: format.mSampleRate };
-        stream.stop_watch = Some(stop_watch);
-        stream.watcher = Some(
+        let rates = Rates { aggregate: native.aggregate, tap: native.tap, advertised: rate, tap_rate: format.mSampleRate };
+        native.stop_watch = Some(stop_watch);
+        native.watcher = Some(
             std::thread::Builder::new()
                 .name("tuldmi-tap-watch".into())
                 .spawn(move || watch(rates, ctx, stopped))?,
@@ -493,8 +567,8 @@ fn changed(now: Option<f64>, then: f64) -> bool {
 }
 
 /// Polls for a dead aggregate device (e.g. coreaudiod restarted), a sample-rate change or a
-/// buffer layout change. On the first one it stops forwarding audio, then delivers `Failed`,
-/// waiting for queue room (it is not the audio callback) unless the stream is stopped first.
+/// buffer layout change. On the first one it stops forwarding audio, then hands `Failed` to the
+/// relay, waiting for room unless the stream is stopped first.
 fn watch(rates: Rates, ctx: Arc<Ctx>, stopped: crossbeam_channel::Receiver<()>) {
     loop {
         match stopped.recv_timeout(Duration::from_millis(500)) {
@@ -520,7 +594,7 @@ fn watch(rates: Rates, ctx: Arc<Ctx>, stopped: crossbeam_channel::Receiver<()>) 
             }
         };
         if let Some(error) = failure {
-            ctx.disable();
+            ctx.active.store(false, Ordering::SeqCst);
             crossbeam_channel::select! {
                 send(ctx.tx, CaptureMsg::Failed { source: Source::System, error: error.into() }) -> _ => (),
                 recv(stopped) -> _ => (),
@@ -532,7 +606,96 @@ fn watch(rates: Rates, ctx: Arc<Ctx>, stopped: crossbeam_channel::Receiver<()>) 
 
 #[cfg(test)]
 mod tests {
-    use super::{changed, interleave};
+    use super::{CaptureMsg, Source, changed, interleave, relay};
+    use std::sync::{Arc, atomic::AtomicU64, atomic::Ordering};
+    use std::time::Instant;
+
+    fn audio() -> CaptureMsg {
+        CaptureMsg::Audio { source: Source::System, data: vec![0.0], at: Instant::now() }
+    }
+    fn failed() -> CaptureMsg {
+        CaptureMsg::Failed { source: Source::System, error: "device stopped".into() }
+    }
+
+    struct Relay {
+        callback: crossbeam_channel::Sender<CaptureMsg>,
+        engine: crossbeam_channel::Receiver<CaptureMsg>,
+        stop: Option<crossbeam_channel::Sender<()>>,
+        handle: std::thread::JoinHandle<()>,
+        dropped: Arc<AtomicU64>,
+    }
+
+    fn start(engine_capacity: usize) -> Relay {
+        let (callback, from) = crossbeam_channel::bounded(16);
+        let (to, engine) = crossbeam_channel::bounded(engine_capacity);
+        let (stop, stopped) = crossbeam_channel::bounded(1);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let counter = dropped.clone();
+        let handle = std::thread::spawn(move || relay(from, to, stopped, counter));
+        Relay { callback, engine, stop: Some(stop), handle, dropped }
+    }
+
+    /// Waits until the relay has taken everything from the private channel.
+    fn drained(r: &Relay) {
+        while !r.callback.is_empty() {
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn nothing_reaches_the_engine_after_stop() {
+        let mut r = start(16);
+        r.callback.send(audio()).unwrap();
+        assert!(matches!(r.engine.recv().unwrap(), CaptureMsg::Audio { .. }));
+        // `stop`: signal and join the relay.
+        r.stop.take().unwrap().send(()).unwrap();
+        r.handle.join().unwrap();
+        // A callback that stalled across `stop` (or the watcher) sends late: it can't get through,
+        // so the replacement stream sharing the engine channel never sees it.
+        assert!(r.callback.send(audio()).is_err());
+        assert!(r.callback.send(failed()).is_err());
+        assert!(r.engine.try_recv().is_err());
+    }
+
+    #[test]
+    fn audio_is_dropped_and_counted_when_the_engine_is_full() {
+        let r = start(1);
+        r.callback.send(audio()).unwrap();
+        r.callback.send(audio()).unwrap();
+        drained(&r);
+        while r.dropped.load(Ordering::Relaxed) == 0 {
+            std::thread::yield_now();
+        }
+        assert_eq!(r.engine.len(), 1);
+    }
+
+    #[test]
+    fn failed_waits_for_room_then_ends_the_stream() {
+        let r = start(1);
+        r.callback.send(audio()).unwrap();
+        r.callback.send(failed()).unwrap();
+        drained(&r);
+        // The relay holds `Failed` while the engine queue is full.
+        assert!(matches!(r.engine.recv().unwrap(), CaptureMsg::Audio { .. }));
+        assert!(matches!(r.engine.recv().unwrap(), CaptureMsg::Failed { .. }));
+        // Then it exits: audio a callback was still copying is not passed on after `Failed`.
+        r.handle.join().unwrap();
+        assert!(r.callback.send(audio()).is_err());
+        assert!(r.engine.try_recv().is_err());
+    }
+
+    #[test]
+    fn stop_wins_over_a_failed_waiting_for_room() {
+        let mut r = start(1);
+        r.callback.send(audio()).unwrap();
+        r.callback.send(failed()).unwrap();
+        drained(&r);
+        r.stop.take().unwrap().send(()).unwrap();
+        r.handle.join().unwrap();
+        // Only the audio that was already queued; the stopped stream's `Failed` never lands.
+        assert!(matches!(r.engine.try_recv(), Ok(CaptureMsg::Audio { .. })));
+        assert!(r.engine.try_recv().is_err());
+    }
 
     #[test]
     fn only_plausible_rate_changes_count() {

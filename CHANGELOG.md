@@ -2,11 +2,11 @@
 
 All notable changes to tuldMi are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] — 2026-11-07
 
 ### Added
 
-- **macOS preview (Apple Silicon, macOS 14.4+).** Microphone through Core Audio; system audio
+- **macOS preview (Apple Silicon, macOS 15.4+).** Microphone through Core Audio; system audio
   through a Core Audio process tap that captures every app's sound, whichever output you use, and
   leaves playback untouched. Distributed as a disk image built in CI, ad-hoc signed and **not
   notarized** (Gatekeeper asks once; see docs/INSTALL.md).
@@ -20,7 +20,8 @@ All notable changes to tuldMi are documented here. Format: [Keep a Changelog](ht
 ### Known limitations
 
 - macOS: not notarized; each ad-hoc signed update asks for both permissions again; no Intel
-  build. Physical device changes on macOS have not been exercised beyond the default-device path.
+  build. macOS 15.4 or later, because playback of the stored Ogg Opus clips needs it. Switching
+  outputs and a coreaudiod restart are handled in code but untested on hardware.
 
 ## [0.1.1] — 2026-10-30
 
@@ -76,4 +77,6 @@ First release. Windows 10/11 x64.
   devices; a settings save can wait up to 5 s during a large retention sweep; rare out-of-order
   status publish between engine threads.
 
+[0.2.0]: https://github.com/spilloid/tuldMi/releases/tag/v0.2.0
+[0.1.1]: https://github.com/spilloid/tuldMi/releases/tag/v0.1.1
 [0.1.0]: https://github.com/spilloid/tuldMi/releases/tag/v0.1.0

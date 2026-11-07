@@ -104,7 +104,7 @@ store's single connection (SQLCipher-compatible) and the single audio writer/rea
   native dialog with a "Pause recording" option.
 - Tray: status, pause/resume, open, per-source status, transcription backlog, settings, quit.
   Icons are drawn at runtime per state (recording / paused / idle / error).
-- Global shortcut (default `Ctrl+Shift+\``) toggles pause from anywhere.
+- Global shortcut (default `Ctrl+Shift+\``; `Cmd+Alt+\`` on macOS, which reserves `Cmd+Shift+\``) toggles pause from anywhere.
 - Launch at login is opt-in (`--minimized` starts in the tray once onboarding is done).
 - All commands are `async` (off the UI thread). The asset protocol is scoped to `audio/`.
 
@@ -113,7 +113,7 @@ store's single connection (SQLCipher-compatible) and the single audio writer/rea
 | Platform | Mic | System audio | Status |
 |---|---|---|---|
 | Windows 10/11 | WASAPI (cpal) | WASAPI loopback on the render endpoint (cpal) | implemented |
-| macOS 14.4+ | Core Audio (cpal) | Core Audio process tap (`capture/macos_tap.rs`) | implemented (preview) |
+| macOS 15.4+ | Core Audio (cpal) | Core Audio process tap (`capture/macos_tap.rs`) | implemented (preview) |
 | Linux | PipeWire/ALSA (cpal) | PipeWire monitor source | planned — new `AudioCaptureProvider` |
 
 ### macOS system audio
@@ -123,10 +123,18 @@ playback unaffected) and a private aggregate device whose only member is that ta
 with an IOProc that follows the same callback contract as cpal (copy, `try_send`, never block). The
 tap is device-independent, so there is one System "device" (`macos-system-audio`) and switching
 outputs needs no reopen. A watcher thread reports a dead aggregate or a changed buffer layout as
-`CaptureMsg::Failed`, and the engine reopens. Permission is TCC "System Audio Recording"
+`CaptureMsg::Failed`, and the engine reopens. The capture channel is shared with the replacement
+stream, so the IOProc and watcher send into a private channel and a per-stream relay thread
+forwards to the engine. `stop` joins the relay first (it makes no Core Audio calls): after that no
+buffer or `Failed` from the old stream can arrive, even from a stalled callback. Core Audio
+teardown then runs on a worker with a 2 s wait, so a stalled coreaudiod can't hold up the
+processing thread. Permission is TCC "System Audio Recording"
 (`NSAudioCaptureUsageDescription`); a denial yields silence, which the UI discloses. The shell
 adds a macOS app menu (its Quit uses the same flush-first exit as the tray), Dock reopen, an overlay
 title bar with native traffic lights, and click-for-menu in the menu bar.
+
+The minimum is **macOS 15.4**, not the tap's 14.4: the timeline plays the stored Ogg Opus clips
+in the WebView, and WebKit plays Ogg Opus only from macOS 15.4.
 
 ## Testing
 
