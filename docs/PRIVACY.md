@@ -57,7 +57,7 @@ Settings → Privacy & data → *Open data folder* takes you there.
 ## Always visible, always stoppable
 
 - The tray icon shows whether tuldMi is recording, paused, or having device trouble.
-- Pause from the tray, the main window, or the global shortcut (default **Ctrl+Shift+`**).
+- Pause from the tray, the main window, or the global shortcut (default **Ctrl+Shift+`** on Windows, **⌥⌘`** on a Mac).
   Paused means the devices are closed — nothing is captured at all.
 - Closing the window does not stop recording; the first time, tuldMi tells you so and offers to
   pause.

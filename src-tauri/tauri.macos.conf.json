@@ -22,7 +22,7 @@
   "bundle": {
     "targets": ["app", "dmg"],
     "macOS": {
-      "minimumSystemVersion": "14.4",
+      "minimumSystemVersion": "15.4",
       "signingIdentity": "-",
       "hardenedRuntime": true,
       "entitlements": "Entitlements.plist",

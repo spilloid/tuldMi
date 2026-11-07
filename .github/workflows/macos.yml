@@ -23,7 +23,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 75
     env:
-      MACOSX_DEPLOYMENT_TARGET: '14.4'
+      MACOSX_DEPLOYMENT_TARGET: '15.4'
       # rust-toolchain.toml pins the Windows MSVC host for local Windows builds; this env var
       # takes precedence over it.
       RUSTUP_TOOLCHAIN: stable
@@ -81,7 +81,7 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' entitlements.plist)" = true
           plutil -extract NSMicrophoneUsageDescription raw "$app/Contents/Info.plist"
           plutil -extract NSAudioCaptureUsageDescription raw "$app/Contents/Info.plist"
-          test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = 14.4
+          test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = 15.4
           test "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")" = "$v"
           test -f "$app/Contents/Resources/ggml-silero-v6.2.0.bin"
           exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")"

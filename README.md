@@ -33,7 +33,7 @@ playable timeline of what was said. Nothing leaves your device.
 - **Retention you control**: delete audio right after transcription, keep 7 days, 30 days, or
   forever. Transcripts are kept independently.
 - **Tray-first**: recording state always visible, pause/resume from the tray or a global
-  shortcut (default **Ctrl+Shift+`**), closing the window keeps listening (and tells you so).
+  shortcut (default **Ctrl+Shift+`**, **⌥⌘`** on a Mac), closing the window keeps listening (and tells you so).
 - **Export** to Markdown or JSON. Delete one event, its audio, or everything.
 
 ## Privacy
@@ -49,7 +49,7 @@ what is **not** yet protected (no encryption at rest yet): [docs/PRIVACY.md](doc
 |---|---|
 | Windows 11 x64 | **Supported** — mic + WASAPI loopback (verified) |
 | Windows 10 x64 | **Unverified** — built for it, not yet tested on it |
-| macOS 14.4+ Apple Silicon | **Preview** — mic (Core Audio) + system audio (Core Audio process tap); ad-hoc signed, not notarized |
+| macOS 15.4+ Apple Silicon | **Preview** — mic (Core Audio) + system audio (Core Audio process tap); ad-hoc signed, not notarized |
 | Linux | Not yet — needs a PipeWire provider |
 
 ## Install
@@ -61,7 +61,7 @@ no admin rights needed). The installer, the app and the uninstaller are Authenti
 may still show a reputation prompt for the first downloads. Verify a download with
 `Get-AuthenticodeSignature` and the published `.sha256`.
 
-**macOS (Apple Silicon, 14.4+):** download `tuldMi_<version>_aarch64.dmg` and drag tuldMi to
+**macOS (Apple Silicon, 15.4+):** download `tuldMi_<version>_aarch64.dmg` and drag tuldMi to
 Applications. It is ad-hoc signed but **not notarized** yet, so macOS blocks the first open: open
 it once, then choose *Open Anyway* in System Settings → Privacy & Security. Check the download
 against the published `.sha256` (`shasum -a 256 -c`). Details: [docs/INSTALL.md](docs/INSTALL.md).
@@ -84,7 +84,7 @@ Models and licenses: [docs/MODELS.md](docs/MODELS.md) · Releasing: [docs/RELEAS
 
 ## Current limitations
 
-- macOS is a preview: Apple Silicon and macOS 14.4+ only, not notarized, and because each build
+- macOS is a preview: Apple Silicon and macOS 15.4+ only, not notarized, and because each build
   is ad-hoc signed macOS asks for microphone and system-audio permission again after an update.
   If permission is denied, macOS delivers silence rather than an error.
 - No Linux build yet.
