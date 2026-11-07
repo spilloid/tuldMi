@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { createBackend } from "../lib/ipc";
 import { useRoute } from "../lib/router";
+import { trayWord } from "../lib/platform";
 import { AppStore } from "../state/store";
 import { StoreProvider, useObservable, useSettings, useStore } from "../state/hooks";
 import { UiProvider } from "../state/ui";
@@ -67,7 +68,7 @@ function Root() {
           <div className="max-w-[440px] text-center">
             <h1 className="font-display text-[26px] font-[460] text-text">tuldMi couldn't start its engine</h1>
             <p className="selectable mt-3 text-base text-muted">{bootError}</p>
-            <p className="mt-4 text-sm text-faint">Your history is safe on disk. Restart tuldMi from the tray; if this keeps happening, the log in the data folder explains why.</p>
+            <p className="mt-4 text-sm text-faint">Your history is safe on disk. Restart tuldMi from the {trayWord()}; if this keeps happening, the log in the data folder explains why.</p>
           </div>
         </div>
       </div>

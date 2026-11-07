@@ -31,6 +31,14 @@ whisper-rs = { version = "0.16", optional = true, features = ["raw-api"] }
 fs4 = "0.13"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Core Audio process tap for system audio (capture/macos_tap.rs). Same versions cpal 0.18 uses.
+objc2 = "0.6"
+objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware", "objc2", "objc2-foundation", "objc2-core-audio-types"] }
+objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes", "objc2"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFDictionary"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSObject", "NSString", "NSUUID", "NSValue"] }
+
 [dev-dependencies]
 tempfile = "3"
 hound = "3"

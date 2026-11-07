@@ -347,7 +347,13 @@ impl Default for Settings {
             model_id: None,
             language: "auto".into(),
             launch_at_login: false,
-            pause_shortcut: "CommandOrControl+Shift+Backquote".into(),
+            // macOS reserves Cmd+Shift+` (cycle windows backwards), so it gets Option+Cmd+`.
+            pause_shortcut: if cfg!(target_os = "macos") {
+                "CommandOrControl+Alt+Backquote"
+            } else {
+                "CommandOrControl+Shift+Backquote"
+            }
+            .into(),
             theme: Theme::System,
         }
     }

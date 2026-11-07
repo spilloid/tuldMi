@@ -1,0 +1,127 @@
+name: macOS Apple Silicon
+# Lint, test and bundle tuldMi for macOS on an arm64 runner. On a published release, attach the
+# disk image and its SHA-256 to that release. The Windows installer is still built and signed
+# locally (scripts/release.ps1, docs/RELEASE.md).
+#
+# The app is ad-hoc signed, not notarized (no Developer ID yet): Gatekeeper warns on first open
+# and the release notes say so. Integrity is the published SHA-256.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    name: ARM64 clippy, tests, disk image
+    runs-on: macos-15
+    timeout-minutes: 75
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.4'
+      # rust-toolchain.toml pins the Windows MSVC host for local Windows builds; this env var
+      # takes precedence over it.
+      RUSTUP_TOOLCHAIN: stable
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require Apple Silicon
+        run: test "$(uname -m)" = arm64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      # .cargo/config.toml points LIBCLANG_PATH (bindgen, whisper-rs-sys) at the Windows LLVM
+      # install; [env] never overrides a variable that is already set, so use Xcode's here.
+      - name: libclang from Xcode
+        run: |
+          dir="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib"
+          test -f "$dir/libclang.dylib"
+          echo "LIBCLANG_PATH=$dir" >> "$GITHUB_ENV"
+      - run: npm ci --no-audit --no-fund
+      - name: Version
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          test "$version" = "$conf" || { echo "package.json $version != tauri.conf.json $conf"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Release tag matches the version
+        if: github.event_name == 'release'
+        run: test "${{ github.event.release.tag_name }}" = "v${{ steps.version.outputs.version }}"
+      - run: npm run typecheck
+      - run: npx vitest run
+      # The shell embeds the built frontend at compile time.
+      - run: npm run build
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked -p tuldmi-engine -p tuldmi
+      - name: Bundle (app + dmg, ad-hoc signed)
+        run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg
+      - name: Verify bundle
+        run: |
+          set -euo pipefail
+          v=${{ steps.version.outputs.version }}
+          app=target/aarch64-apple-darwin/release/bundle/macos/tuldMi.app
+          dmg=target/aarch64-apple-darwin/release/bundle/dmg/tuldMi_${v}_aarch64.dmg
+          test -d "$app" && test -f "$dmg"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -d --verbose=2 "$app" 2>&1 | grep -E '^CodeDirectory .*flags=.*runtime'
+          codesign -d --entitlements - --xml "$app" > entitlements.plist
+          test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' entitlements.plist)" = true
+          plutil -extract NSMicrophoneUsageDescription raw "$app/Contents/Info.plist"
+          plutil -extract NSAudioCaptureUsageDescription raw "$app/Contents/Info.plist"
+          test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = 14.4
+          test "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")" = "$v"
+          test -f "$app/Contents/Resources/ggml-silero-v6.2.0.bin"
+          exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")"
+          lipo -archs "$exe" | grep -qx arm64
+          mkdir -p dist
+          otool -L "$exe" | tee dist/macos-linked-libraries.txt
+          # Only system libraries: everything else must be statically linked.
+          # (`! cmd` never trips `set -e`, so test explicitly.)
+          if tail -n +2 dist/macos-linked-libraries.txt | grep -v -E '^\s+(/System/Library/|/usr/lib/)'; then
+            echo "non-system library linked"; exit 1
+          fi
+          hdiutil verify "$dmg"
+          cp "$dmg" dist/
+          (cd dist && shasum -a 256 "tuldMi_${v}_aarch64.dmg" > "tuldMi_${v}_aarch64.dmg.sha256" && cat ./*.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tuldMi-macos-arm64
+          # One directory, so the artifact's root is dist/ itself (publish downloads it into dist).
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Attach disk image to the release
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tuldMi-macos-arm64
+          path: dist
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          cd dist
+          shasum -a 256 -c ./*.sha256
+          gh release upload "$TAG" ./*.dmg ./*.sha256 --clobber --repo "$GITHUB_REPOSITORY"

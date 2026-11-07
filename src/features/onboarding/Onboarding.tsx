@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import type { DeviceInfo, Retention, Settings } from "../../lib/ipc/types";
 import { errorMessage } from "../../lib/ipc/backend";
 import { navigate } from "../../lib/router";
+import { isMac, trayWord } from "../../lib/platform";
 import { transition, useReducedMotion } from "../../lib/motion";
 import { useBackend, useModels, useSettings, useStatus } from "../../state/hooks";
 import { Titlebar } from "../../components/shell/Titlebar";
@@ -182,7 +183,7 @@ function Welcome() {
       </StepTitle>
       <ul className="space-y-3">
         <Feature icon={<Lock size={15} />} title="Private by design">Everything is recorded, transcribed and stored on this computer.</Feature>
-        <Feature icon={<Pause size={15} />} title="Always in your control">Pause instantly from the tray or a global shortcut. Recording state is always visible.</Feature>
+        <Feature icon={<Pause size={15} />} title="Always in your control">Pause instantly from the {trayWord()} or a global shortcut. Recording state is always visible.</Feature>
         <Feature icon={<ShieldCheck size={15} />} title="Honest about what it does">Only speech is kept. Your mic is Me; everything you hear is Remote. No guessing who said what.</Feature>
       </ul>
     </>
@@ -395,7 +396,7 @@ function Ready({ settings }: { settings: Settings }) {
   return (
     <>
       <StepTitle eyebrow="All set" title="tuldMi is ready to listen">
-        It lives in your system tray. Closing the window keeps it listening; the tray icon always shows whether it's recording.
+        It lives in your {isMac() ? "menu bar" : "system tray"}. Closing the window keeps it listening; the {trayWord()} icon always shows whether it's recording.
       </StepTitle>
       <div className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-accent-line bg-accent-soft px-5 py-4">
         <div>

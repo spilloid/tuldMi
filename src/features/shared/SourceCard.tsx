@@ -1,6 +1,7 @@
 import { AlertTriangle, Mic, Monitor } from "lucide-react";
 import type { DeviceInfo, Settings, Source, SourceStatus } from "../../lib/ipc/types";
 import { useLevels } from "../../state/hooks";
+import { isMac } from "../../lib/platform";
 import { LiveMeter } from "../../components/viz/LiveMeter";
 import { Select, Switch } from "../../components/ui/controls";
 
@@ -27,13 +28,22 @@ export function SourceCard({
 }) {
   const { summary } = useLevels();
   const me = source === "mic";
+  const mac = isMac();
+  // macOS taps all system audio at once (no per-output choice), and a denied permission
+  // shows up as silence, not an error, so say where to grant it.
+  const fixedDevice = mac && !me;
+  const permissionHint = mac
+    ? me
+      ? "If the level stays flat while you talk, allow tuldMi in System Settings › Privacy & Security › Microphone."
+      : "macOS asks for permission the first time. If the level stays flat while audio plays, allow tuldMi in System Settings › Privacy & Security › Screen & System Audio Recording."
+    : null;
   const enabled = me ? settings.micEnabled : settings.systemEnabled;
   const deviceId = me ? settings.micDeviceId : settings.systemDeviceId;
   const kind = me ? "input" : "output";
   const list = (devices ?? []).filter((d) => d.kind === kind);
   const def = list.find((d) => d.isDefault);
   const options = [
-    { value: DEFAULT, label: `System default${def ? ` — ${def.name}` : ""}`, hint: "Follows Windows when you switch devices" },
+    { value: DEFAULT, label: `System default${def ? ` — ${def.name}` : ""}`, hint: `Follows ${mac ? "macOS" : "Windows"} when you switch devices` },
     ...list.map((d) => ({ value: d.id, label: d.name })),
   ];
   const sum = summary[source];
@@ -71,14 +81,20 @@ export function SourceCard({
       <div className={`border-t border-line-soft px-4 py-3 ${enabled ? "" : "opacity-50"}`}>
         <div className="flex items-center gap-3">
           <span className="w-[54px] shrink-0 text-sm text-muted">Device</span>
-          <Select
-            label={me ? "Microphone device" : "Output device to capture"}
-            value={deviceId ?? DEFAULT}
-            options={options}
-            disabled={!enabled || !devices}
-            onChange={(v) => onChange(me ? { micDeviceId: v === DEFAULT ? null : v } : { systemDeviceId: v === DEFAULT ? null : v })}
-            className="min-w-0 flex-1"
-          />
+          {fixedDevice ? (
+            <span className="min-w-0 flex-1 text-sm text-text">
+              All system audio <span className="text-faint">— every app, whichever speakers or headphones you use</span>
+            </span>
+          ) : (
+            <Select
+              label={me ? "Microphone device" : "Output device to capture"}
+              value={deviceId ?? DEFAULT}
+              options={options}
+              disabled={!enabled || !devices}
+              onChange={(v) => onChange(me ? { micDeviceId: v === DEFAULT ? null : v } : { systemDeviceId: v === DEFAULT ? null : v })}
+              className="min-w-0 flex-1"
+            />
+          )}
         </div>
         <div className="mt-3 flex items-center gap-3">
           <span className="w-[54px] shrink-0 text-sm text-muted">Level</span>
@@ -91,6 +107,7 @@ export function SourceCard({
           </div>
         </div>
         {status?.format && enabled && !problem && <div className="mt-2 pl-[66px] text-xs text-faint">{status.deviceName} · {status.format}</div>}
+        {permissionHint && enabled && <div className="mt-2 pl-[66px] text-xs text-faint">{permissionHint}</div>}
       </div>
     </div>
   );

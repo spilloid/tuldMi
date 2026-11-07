@@ -4,7 +4,7 @@ title: tuldMi documentation
 
 # tuldMi documentation
 
-tuldMi is a local-first ambient audio memory for Windows. It listens to the microphone and system
+tuldMi is a local-first ambient audio memory for Windows and (preview) macOS on Apple Silicon. It listens to the microphone and system
 audio you allow, keeps only the speech, transcribes it on your computer, and gives you a
 searchable, playable timeline of what was said.
 

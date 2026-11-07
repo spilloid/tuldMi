@@ -4,7 +4,9 @@ title: Install and first run
 
 # Install and first run
 
-tuldMi runs on **Windows 11 (x64)**. Windows 10 is unverified: it should work, but it hasn't been tested. macOS and Linux are not supported yet.
+tuldMi runs on **Windows 11 (x64)** and, as a preview, on **macOS 14.4 or later on Apple Silicon**.
+Windows 10 is unverified: it should work, but it hasn't been tested. Linux is not supported yet.
+On a Mac, skip to [macOS](#macos); the setup steps and everyday use are the same.
 
 ## 1. Download
 
@@ -50,6 +52,30 @@ The first launch walks you through seven short steps:
    against its SHA-256 hash. Capture works while the model downloads; speech waits in a queue.
 7. **Ready**.
 
+## macOS
+
+1. Download `tuldMi_<version>_aarch64.dmg` and its `.sha256` file from the
+   [latest release](https://github.com/spilloid/tuldMi/releases/latest). Optionally verify it, from
+   your Downloads folder: `shasum -a 256 -c tuldMi_*_aarch64.dmg.sha256` should print `OK`.
+2. Open the disk image and drag **tuldMi** to **Applications**.
+3. The app is ad-hoc signed but **not notarized** yet (no Apple Developer ID), so the first open is
+   blocked: open tuldMi once, dismiss the warning, then go to **System Settings → Privacy &
+   Security** and choose **Open Anyway**.
+4. Setup is the same seven steps as above. During the device test macOS asks twice:
+   - **Microphone**, for Me.
+   - **System Audio Recording**, for Remote. tuldMi captures every app's sound through a Core
+     Audio tap, whichever speakers or headphones you use, so there is no output device to pick.
+
+   If you deny either one, macOS sends silence instead of an error and the level meter stays flat.
+   Turn it on later in System Settings → Privacy & Security → **Microphone** or **Screen & System
+   Audio Recording**.
+5. Because each build is ad-hoc signed, macOS treats an updated tuldMi as a new app and asks for
+   both permissions again.
+
+On a Mac, tuldMi lives in the **menu bar**, the shortcuts use **⌘** where Windows uses Ctrl (pause:
+**⌥⌘`**, because macOS uses ⌘⇧` to cycle windows; search: **⌘K**), and **Quit tuldMi** is in the menu bar menu or **⌘Q**. Closing the window
+with the red button keeps it listening; click the Dock icon to bring the window back.
+
 ## Everyday use
 
 - tuldMi lives in the **system tray**. The icon shows whether it is recording, paused, or has a
@@ -65,7 +91,8 @@ The first launch walks you through seven short steps:
 
 ## Removing tuldMi
 
-Uninstall it from Windows Settings → Apps. Your data lives in
-`%APPDATA%\com.spillerstech.tuldmi\`. Settings → Privacy & data → *Delete all history* removes
+Uninstall it from Windows Settings → Apps (on a Mac, quit it and move it to the Trash). Your data
+lives in `%APPDATA%\com.spillerstech.tuldmi\` on Windows and
+`~/Library/Application Support/com.spillerstech.tuldmi/` on macOS. Settings → Privacy & data → *Delete all history* removes
 every transcript and recording but keeps your settings and downloaded models; to remove
 everything, delete that folder after uninstalling.

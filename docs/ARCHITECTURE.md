@@ -65,7 +65,8 @@ Pause, device loss and shutdown flush the in-progress segment instead of droppin
 
 ## Persistence
 
-`data_dir` = `%APPDATA%\com.spillerstech.tuldmi` on Windows.
+`data_dir` = `%APPDATA%\com.spillerstech.tuldmi` on Windows,
+`~/Library/Application Support/com.spillerstech.tuldmi` on macOS.
 
 ```
 tuldmi.db            SQLite (WAL); schema in crates/engine/src/storage/migrations/
@@ -112,8 +113,20 @@ store's single connection (SQLCipher-compatible) and the single audio writer/rea
 | Platform | Mic | System audio | Status |
 |---|---|---|---|
 | Windows 10/11 | WASAPI (cpal) | WASAPI loopback on the render endpoint (cpal) | implemented |
-| macOS 13+ | Core Audio (cpal) | ScreenCaptureKit audio / Core Audio process taps | planned — new `AudioCaptureProvider` |
+| macOS 14.4+ | Core Audio (cpal) | Core Audio process tap (`capture/macos_tap.rs`) | implemented (preview) |
 | Linux | PipeWire/ALSA (cpal) | PipeWire monitor source | planned — new `AudioCaptureProvider` |
+
+### macOS system audio
+
+`macos_tap` creates a private, global `CATapDescription` (every process's output, mono mixdown,
+playback unaffected) and a private aggregate device whose only member is that tap, then reads it
+with an IOProc that follows the same callback contract as cpal (copy, `try_send`, never block). The
+tap is device-independent, so there is one System "device" (`macos-system-audio`) and switching
+outputs needs no reopen. A watcher thread reports a dead aggregate or a changed buffer layout as
+`CaptureMsg::Failed`, and the engine reopens. Permission is TCC "System Audio Recording"
+(`NSAudioCaptureUsageDescription`); a denial yields silence, which the UI discloses. The shell
+adds a macOS app menu (its Quit uses the same flush-first exit as the tray), Dock reopen, an overlay
+title bar with native traffic lights, and click-for-menu in the menu bar.
 
 ## Testing
 
