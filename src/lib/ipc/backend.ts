@@ -65,6 +65,8 @@ export interface Backend {
   deleteModel(modelId: string): Promise<void>;
   storageStats(): Promise<StorageStats>;
   openDataDir(): Promise<void>;
+  /** The installed tuldmi-mcp executable, or null when this build doesn't include it. */
+  mcpServerPath(): Promise<string | null>;
   exportTranscripts(format: ExportFormat, from: number | null, to: number | null): Promise<string>;
   revealPath(path: string): Promise<void>;
   quitApp(): Promise<void>;

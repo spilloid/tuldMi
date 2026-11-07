@@ -336,6 +336,11 @@ export class DemoBackend implements Backend {
     throw "Demo mode has no data folder — nothing is stored on disk.";
   }
 
+  async mcpServerPath(): Promise<string | null> {
+    // Demo mode has no history to serve.
+    return null;
+  }
+
   async exportTranscripts(_format: ExportFormat, _from: number | null, _to: number | null): Promise<string> {
     throw "Export is unavailable in demo mode — there are no real transcripts to write.";
   }

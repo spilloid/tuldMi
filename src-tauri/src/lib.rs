@@ -29,7 +29,13 @@ pub struct AppState {
 
 pub fn run() {
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| window::show_main(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if args.iter().any(|a| a == PAUSE_ARG) {
+                pause_by_request(app);
+            } else {
+                window::show_main(app);
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
@@ -76,6 +82,7 @@ pub fn run() {
             commands::delete_model,
             commands::storage_stats,
             commands::open_data_dir,
+            commands::mcp_server_path,
             commands::export_transcripts,
             commands::reveal_path,
             commands::quit_app,
@@ -109,7 +116,42 @@ pub fn is_exiting() -> bool {
     EXITING.load(std::sync::atomic::Ordering::Acquire)
 }
 
+/// `tuldmi --pause` (what `tuldmi-mcp`'s `pause_recording` runs): a running tuldMi gets the
+/// argument through the single-instance plugin and pauses; that process then exits 0.
+pub const PAUSE_ARG: &str = "--pause";
+/// Exit code of `tuldmi --pause` when no tuldMi was running: nothing is started.
+pub const PAUSE_NOT_RUNNING: i32 = 3;
+
+/// Pause, never resume, at another process's request (`tuldmi --pause`). The same path as the
+/// tray, so the icon shows it. Already paused (or not set up yet) stays as it is.
+fn pause_by_request(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let engine = state.engine.clone();
+    let spawned = std::thread::Builder::new().name("tuldmi-pause-request".into()).spawn(move || {
+        let _serial = TOGGLE.lock();
+        if !engine.settings().onboarding_complete {
+            return;
+        }
+        if matches!(engine.status().state, CaptureState::Recording | CaptureState::Starting | CaptureState::Error) {
+            tracing::info!("paused at the request of another program (tuldmi --pause)");
+            if let Err(e) = engine.set_paused(true) {
+                tracing::warn!(error = %e, "pause request failed");
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "pause request thread failed to start");
+    }
+}
+
+/// Serializes pause/resume requests (tray, shortcut, `--pause`).
+static TOGGLE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 fn setup(app: &AppHandle) -> Result<(), String> {
+    // We are the only instance, so nothing is running to pause: say so and start nothing.
+    if std::env::args().any(|a| a == PAUSE_ARG) {
+        std::process::exit(PAUSE_NOT_RUNNING);
+    }
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_dir).map_err(|e| format!("cannot create {}: {e}", data_dir.display()))?;
 
@@ -203,7 +245,6 @@ pub fn toggle_pause(app: &AppHandle) {
     // engine to flush, which may itself need the main thread. Never wait here. Toggles are
     // serialized and each reads the state only once the previous one finished, so two quick
     // presses mean pause-then-resume rather than two pauses.
-    static TOGGLE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
     let spawned = std::thread::Builder::new().name("tuldmi-toggle".into()).spawn(move || {
         let _serial = TOGGLE.lock();
         let recording = matches!(engine.status().state, CaptureState::Recording | CaptureState::Starting | CaptureState::Error);

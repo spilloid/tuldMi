@@ -32,7 +32,7 @@ fn history() -> History {
     let clip = dir.path().join("audio").join("remote.ogg");
     std::fs::create_dir_all(clip.parent().unwrap()).unwrap();
     std::fs::write(&clip, &audio).unwrap();
-    let mut add = |source, at: i64, text: &str, audio: Option<NewAudio>| {
+    let add = |source, at: i64, text: &str, audio: Option<NewAudio>| {
         let event = store.insert_event(&NewEvent { session_id: session.id, source, started_at: at, ended_at: at + 5_000, audio }).unwrap();
         store.save_transcript(event.id, &[NewSegment { start_ms: 0, end_ms: 5_000, text: text.into(), confidence: None }], Some("en"), "tiny").unwrap();
         event.id
@@ -117,7 +117,7 @@ impl Client {
 
     /// Closes stdin and returns what the server logged.
     fn finish(self) -> String {
-        let Client { mut child, stdin, .. } = self;
+        let Client { child, stdin, .. } = self;
         drop(stdin);
         let output = child.wait_with_output().unwrap();
         assert!(output.status.success());

@@ -181,7 +181,20 @@ export interface Settings {
   /** Tauri accelerator string. */
   pauseShortcut: string;
   theme: Theme;
+  /** What AI assistants may read through tuldmi-mcp. Off by default. */
+  mcp: McpSettings;
 }
+
+export interface McpSettings {
+  enabled: boolean;
+  /** Remote is other people's words, so it is a separate opt-in. */
+  includeRemote: boolean;
+  allowAudio: boolean;
+  /** Nothing older is returned; 0 = no limit. */
+  maxAgeDays: number;
+}
+
+export const DEFAULT_MCP: McpSettings = { enabled: false, includeRemote: false, allowAudio: false, maxAgeDays: 30 };
 
 export const DEFAULT_SETTINGS: Settings = {
   onboardingComplete: false,
@@ -198,6 +211,7 @@ export const DEFAULT_SETTINGS: Settings = {
   launchAtLogin: false,
   pauseShortcut: "CommandOrControl+Shift+Backquote",
   theme: "system",
+  mcp: DEFAULT_MCP,
 };
 
 export interface ModelInfo {

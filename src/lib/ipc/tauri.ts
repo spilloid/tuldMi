@@ -37,6 +37,7 @@ export class TauriBackend implements Backend {
   deleteModel = (modelId: string) => invoke<void>("delete_model", { modelId });
   storageStats = () => invoke<StorageStats>("storage_stats");
   openDataDir = () => invoke<void>("open_data_dir");
+  mcpServerPath = () => invoke<string | null>("mcp_server_path");
   exportTranscripts = (format: ExportFormat, from: number | null, to: number | null) =>
     invoke<string>("export_transcripts", { format, from: from ?? undefined, to: to ?? undefined });
   revealPath = (path: string) => invoke<void>("reveal_path", { path });

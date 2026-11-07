@@ -65,9 +65,11 @@ jobs:
       # The shell embeds the built frontend at compile time.
       - run: npm run build
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - run: cargo test --locked -p tuldmi-engine -p tuldmi
-      - name: Bundle (app + dmg, ad-hoc signed)
-        run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg
+      - run: cargo test --locked -p tuldmi-engine -p tuldmi -p tuldmi-mcp
+      - name: Bundle (app + dmg, ad-hoc signed, with tuldmi-mcp)
+        run: |
+          node scripts/build-mcp.mjs aarch64-apple-darwin
+          npx tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.bundle.conf.json
       - name: Verify bundle
         run: |
           set -euo pipefail
@@ -86,6 +88,16 @@ jobs:
           test -f "$app/Contents/Resources/ggml-silero-v6.2.0.bin"
           exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")"
           lipo -archs "$exe" | grep -qx arm64
+          # tuldmi-mcp finds the app as its sibling `tuldmi`, and must run on its own.
+          test "$(basename "$exe")" = tuldmi
+          mcp="$app/Contents/MacOS/tuldmi-mcp"
+          test -x "$mcp"
+          lipo -archs "$mcp" | grep -qx arm64
+          codesign --verify --strict --verbose=2 "$mcp"
+          test "$("$mcp" --version)" = "tuldmi-mcp $v"
+          if otool -L "$mcp" | tail -n +2 | grep -v -E '^\s+(/System/Library/|/usr/lib/)'; then
+            echo "tuldmi-mcp links a non-system library"; exit 1
+          fi
           mkdir -p dist
           otool -L "$exe" | tee dist/macos-linked-libraries.txt
           # Only system libraries: everything else must be statically linked.
