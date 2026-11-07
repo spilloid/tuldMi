@@ -124,9 +124,11 @@ with an IOProc that follows the same callback contract as cpal (copy, `try_send`
 tap is device-independent, so there is one System "device" (`macos-system-audio`) and switching
 outputs needs no reopen. A watcher thread reports a dead aggregate or a changed buffer layout as
 `CaptureMsg::Failed`, and the engine reopens. The capture channel is shared with the replacement
-stream, so `stop` first retires the stream's sender under a lock the IOProc only `try_lock`s:
-after that no buffer or `Failed` from the old stream can arrive. Core Audio teardown then runs on a
-worker with a 2 s wait, so a stalled coreaudiod can't hold up the processing thread. Permission is TCC "System Audio Recording"
+stream, so the IOProc and watcher send into a private channel and a per-stream relay thread
+forwards to the engine. `stop` joins the relay first (it makes no Core Audio calls): after that no
+buffer or `Failed` from the old stream can arrive, even from a stalled callback. Core Audio
+teardown then runs on a worker with a 2 s wait, so a stalled coreaudiod can't hold up the
+processing thread. Permission is TCC "System Audio Recording"
 (`NSAudioCaptureUsageDescription`); a denial yields silence, which the UI discloses. The shell
 adds a macOS app menu (its Quit uses the same flush-first exit as the tray), Dock reopen, an overlay
 title bar with native traffic lights, and click-for-menu in the menu bar.

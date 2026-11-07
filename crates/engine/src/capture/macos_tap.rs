@@ -15,9 +15,14 @@
 //! format beyond one 500 ms poll) and reports `CaptureMsg::Failed`, and the engine reopens.
 //!
 //! Opening talks to coreaudiod (and may trigger the permission prompt), so it runs on its own
-//! thread with a bounded wait, like the cpal provider; at most one open is in flight. Stopping
-//! cuts the stream off from the engine at once, then releases Core Audio on a worker with a
-//! bounded wait, so a stalled coreaudiod never holds up the processing thread.
+//! thread with a bounded wait, like the cpal provider; at most one open is in flight.
+//!
+//! The engine's capture channel is shared with whatever stream replaces this one, so the IOProc
+//! and the watcher never send to it directly. They send into a private channel, and a relay
+//! thread forwards to the engine. `stop` joins the relay (it makes no Core Audio calls, so this
+//! is quick); after that the private channel is disconnected, and even a callback that stalled
+//! mid-cycle can't reach the engine. Core Audio teardown then runs on a worker with a bounded
+//! wait, so a stalled coreaudiod doesn't hold up the processing thread.
 
 use super::*;
 use std::ffi::{CStr, c_void};
@@ -29,7 +34,6 @@ use std::sync::{
 use std::time::Duration;
 
 use objc2::AnyThread;
-use parking_lot::Mutex;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_core_audio::{
@@ -126,9 +130,6 @@ fn ns(key: &CStr) -> Retained<NSString> {
 const OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 /// A previous open that has not returned yet (a stalled coreaudiod call) blocks new ones.
 static OPENING: AtomicBool = AtomicBool::new(false);
-/// How long `stop` waits for a callback holding the sender (normally free at once: a callback
-/// holds it for one copy and `try_send`).
-const RETIRE_WAIT: Duration = Duration::from_millis(500);
 /// How long `stop` waits for Core Audio teardown before leaving it to finish in the background.
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -136,15 +137,12 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 /// destroyed, so the raw pointer handed to Core Audio never dangles. If Core Audio fails to
 /// unregister the IOProc, the `Arc` is deliberately leaked (see `stop`).
 struct Ctx {
-    /// This stream's only way into the engine, for the IOProc and the watcher alike. `retire`
-    /// takes it out under the lock, so after that nothing from this stream reaches the engine,
-    /// not even from a callback that was already running. The channel is shared with the
-    /// replacement stream, so this is what keeps a late buffer out of the next one.
-    tx: Mutex<Option<Sender<CaptureMsg>>>,
+    /// The private channel to this stream's relay (not the engine's channel).
+    tx: Sender<CaptureMsg>,
     dropped: Arc<AtomicU64>,
     channels: usize,
-    /// The IOProc forwards audio only while set (read under the `tx` lock). Set by `open` once
-    /// the caller has accepted the stream; cleared by `retire` and by the watcher on failure.
+    /// The IOProc forwards audio only while set. Set by `open` once the caller has accepted the
+    /// stream; cleared by `stop` and by the watcher on failure.
     active: AtomicBool,
     /// Set by the IOProc when the buffer layout stops matching `Opened`; the watcher reports it.
     format_changed: AtomicBool,
@@ -152,6 +150,8 @@ struct Ctx {
 
 pub struct TapStream {
     dropped: Arc<AtomicU64>,
+    /// The relay's stop signal and thread. Joined first in `stop`.
+    relay: Option<(Sender<()>, std::thread::JoinHandle<()>)>,
     /// Everything Core Audio holds; released when this is dropped.
     native: Native,
 }
@@ -176,40 +176,36 @@ impl Native {
 
 impl Ctx {
     fn new(tx: Sender<CaptureMsg>, dropped: Arc<AtomicU64>, channels: usize) -> Self {
-        Ctx {
-            tx: Mutex::new(Some(tx)),
-            dropped,
-            channels,
-            active: AtomicBool::new(false),
-            format_changed: AtomicBool::new(false),
-        }
+        Ctx { tx, dropped, channels, active: AtomicBool::new(false), format_changed: AtomicBool::new(false) }
     }
+}
 
-    /// Runs `send` with the sender if the stream is active. Never waits: when `retire` or the
-    /// watcher holds the lock, this cycle's audio is dropped (and counted).
-    fn with_sender(&self, send: impl FnOnce(&Sender<CaptureMsg>)) {
-        let Some(tx) = self.tx.try_lock() else {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-            return;
+/// Forwards this stream's messages to the engine until `stop` signals (or drops) `stop_relay`.
+/// Audio is `try_send`: a full engine queue drops it, counted, like the callback edge. `Failed`
+/// waits for room, but never past the stop signal, and ends the relay: the stream is dead, so a
+/// buffer a callback was still copying is not passed on after it.
+fn relay(from: crossbeam_channel::Receiver<CaptureMsg>, to: Sender<CaptureMsg>, stop_relay: crossbeam_channel::Receiver<()>, dropped: Arc<AtomicU64>) {
+    loop {
+        let msg = crossbeam_channel::select! {
+            recv(stop_relay) -> _ => return,
+            recv(from) -> msg => match msg {
+                Ok(msg) => msg,
+                Err(_) => return,
+            },
         };
-        if let Some(tx) = tx.as_ref()
-            && self.active.load(Ordering::SeqCst)
-        {
-            send(tx);
-        }
-    }
-
-    /// Cuts this stream off from the engine. `true`: nothing from it will be sent again.
-    /// `false`: a callback has held the sender for `RETIRE_WAIT` (stalled mid-send), and that
-    /// one buffer may still arrive.
-    fn retire(&self) -> bool {
-        self.active.store(false, Ordering::SeqCst);
-        match self.tx.try_lock_for(RETIRE_WAIT) {
-            Some(mut tx) => {
-                *tx = None;
-                true
+        match msg {
+            CaptureMsg::Failed { .. } => {
+                crossbeam_channel::select! {
+                    send(to, msg) -> _ => (),
+                    recv(stop_relay) -> _ => (),
+                }
+                return;
             }
-            None => false,
+            msg => {
+                if to.try_send(msg).is_err() {
+                    dropped.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         }
     }
 }
@@ -222,20 +218,28 @@ impl CaptureStream for TapStream {
         self.dropped.load(Ordering::Relaxed)
     }
     fn stop(&mut self) {
+        if let Some(ctx) = &self.native.ctx {
+            ctx.active.store(false, Ordering::SeqCst);
+        }
+        // After this join nothing from this stream reaches the engine: the relay was its only
+        // way in, and its end of the private channel is gone, so a late send fails.
+        if let Some((stop_relay, handle)) = self.relay.take() {
+            let _ = stop_relay.try_send(());
+            drop(stop_relay);
+            if handle.join().is_err() {
+                tracing::error!("system audio relay panicked");
+            }
+        }
         if self.native.is_released() {
             return;
-        }
-        if let Some(ctx) = &self.native.ctx
-            && !ctx.retire()
-        {
-            tracing::error!("system audio callback stalled while stopping; one late buffer may arrive");
         }
         let native = std::mem::replace(
             &mut self.native,
             Native { tap: 0, aggregate: 0, proc_id: None, started: false, ctx: None, stop_watch: None, watcher: None },
         );
-        // If the thread can't be spawned, the closure (and `native` with it) is dropped right
-        // here, which releases everything on this thread instead.
+        // If the thread can't be spawned (out of resources), the closure and `native` with it
+        // are dropped right here: teardown then runs on this thread, without the deadline.
+        // Leaking instead would leave the tap running and macOS's recording indicator on.
         let (done, finished) = crossbeam_channel::bounded::<()>(1);
         let spawned = std::thread::Builder::new().name("tuldmi-tap-stop".into()).spawn(move || {
             drop(native);
@@ -333,11 +337,13 @@ unsafe extern "C-unwind" fn io_proc(
     // SAFETY: `client` is `Arc::as_ptr` of the `Ctx` that `TapStream` keeps alive until this
     // IOProc is destroyed; only shared access happens here.
     let ctx = unsafe { &*(client as *const Ctx) };
-    ctx.with_sender(|tx| forward(ctx, tx, input));
+    if ctx.active.load(Ordering::SeqCst) {
+        forward(ctx, input);
+    }
     0
 }
 
-fn forward(ctx: &Ctx, tx: &Sender<CaptureMsg>, input: NonNull<AudioBufferList>) {
+fn forward(ctx: &Ctx, input: NonNull<AudioBufferList>) {
     let list = input.as_ptr();
     // SAFETY: Core Audio passes a valid AudioBufferList whose trailing array holds
     // `mNumberBuffers` entries (the struct declares `[AudioBuffer; 1]` as a C flexible array).
@@ -359,7 +365,8 @@ fn forward(ctx: &Ctx, tx: &Sender<CaptureMsg>, input: NonNull<AudioBufferList>) 
     match interleave(&planes, &counts, ctx.channels) {
         Some(data) if data.is_empty() => {}
         Some(data) => {
-            if tx
+            if ctx
+                .tx
                 .try_send(CaptureMsg::Audio { source: Source::System, data, at: Instant::now() })
                 .is_err()
             {
@@ -412,6 +419,7 @@ fn build(tx: Sender<CaptureMsg>, cancelled: &AtomicBool) -> Result<TapStream> {
     let dropped = Arc::new(AtomicU64::new(0));
     let mut stream = TapStream {
         dropped: dropped.clone(),
+        relay: None,
         native: Native { tap: 0, aggregate: 0, proc_id: None, started: false, ctx: None, stop_watch: None, watcher: None },
     };
     let native = &mut stream.native;
@@ -487,7 +495,8 @@ fn build(tx: Sender<CaptureMsg>, cancelled: &AtomicBool) -> Result<TapStream> {
         }
         tracing::info!(tap_rate = format.mSampleRate, rate, channels, "system audio tap ready");
 
-        let ctx = Arc::new(Ctx::new(tx.clone(), dropped.clone(), channels));
+        let (private_tx, private_rx) = crossbeam_channel::bounded(CAPTURE_CHANNEL_CAPACITY);
+        let ctx = Arc::new(Ctx::new(private_tx, dropped.clone(), channels));
         check(
             AudioDeviceCreateIOProcID(
                 native.aggregate,
@@ -510,6 +519,15 @@ fn build(tx: Sender<CaptureMsg>, cancelled: &AtomicBool) -> Result<TapStream> {
             channels: channels as u16,
         })
         .map_err(|_| crate::Error::Device("capture queue full at open".into()))?;
+
+        // Before the IOProc starts, so it has somewhere to deliver from the first cycle.
+        let (stop_relay, relay_stopped) = crossbeam_channel::bounded::<()>(1);
+        let relay_dropped = dropped.clone();
+        let handle = std::thread::Builder::new()
+            .name("tuldmi-tap-relay".into())
+            .spawn(move || relay(private_rx, tx, relay_stopped, relay_dropped))?;
+        stream.relay = Some((stop_relay, handle));
+        let native = &mut stream.native;
 
         check(AudioDeviceStart(native.aggregate, native.proc_id), "starting system audio capture")?;
         native.started = true;
@@ -549,8 +567,8 @@ fn changed(now: Option<f64>, then: f64) -> bool {
 }
 
 /// Polls for a dead aggregate device (e.g. coreaudiod restarted), a sample-rate change or a
-/// buffer layout change. On the first one it stops forwarding audio, then delivers `Failed`
-/// (see `report_failure`).
+/// buffer layout change. On the first one it stops forwarding audio, then hands `Failed` to the
+/// relay, waiting for room unless the stream is stopped first.
 fn watch(rates: Rates, ctx: Arc<Ctx>, stopped: crossbeam_channel::Receiver<()>) {
     loop {
         match stopped.recv_timeout(Duration::from_millis(500)) {
@@ -576,28 +594,11 @@ fn watch(rates: Rates, ctx: Arc<Ctx>, stopped: crossbeam_channel::Receiver<()>) 
             }
         };
         if let Some(error) = failure {
-            report_failure(&ctx, error, &stopped);
-            return;
-        }
-    }
-}
-
-/// Stops forwarding audio and sends `Failed`, waiting for queue room (this is not the audio
-/// callback) but never past `stop`: once the sender is retired the stream says nothing more,
-/// so a late `Failed` can't reach the replacement stream. The send happens under the sender
-/// lock after `active` is cleared, so no `Audio` from this stream follows it.
-fn report_failure(ctx: &Ctx, error: &str, stopped: &crossbeam_channel::Receiver<()>) {
-    ctx.active.store(false, Ordering::SeqCst);
-    loop {
-        {
-            let tx = ctx.tx.lock();
-            let Some(tx) = tx.as_ref() else { return };
-            match tx.try_send(CaptureMsg::Failed { source: Source::System, error: error.into() }) {
-                Err(crossbeam_channel::TrySendError::Full(_)) => {}
-                _ => return,
+            ctx.active.store(false, Ordering::SeqCst);
+            crossbeam_channel::select! {
+                send(ctx.tx, CaptureMsg::Failed { source: Source::System, error: error.into() }) -> _ => (),
+                recv(stopped) -> _ => (),
             }
-        }
-        if !matches!(stopped.recv_timeout(Duration::from_millis(50)), Err(crossbeam_channel::RecvTimeoutError::Timeout)) {
             return;
         }
     }
@@ -605,72 +606,95 @@ fn report_failure(ctx: &Ctx, error: &str, stopped: &crossbeam_channel::Receiver<
 
 #[cfg(test)]
 mod tests {
-    use super::{CaptureMsg, Ctx, Source, changed, interleave, report_failure};
+    use super::{CaptureMsg, Source, changed, interleave, relay};
     use std::sync::{Arc, atomic::AtomicU64, atomic::Ordering};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     fn audio() -> CaptureMsg {
         CaptureMsg::Audio { source: Source::System, data: vec![0.0], at: Instant::now() }
     }
+    fn failed() -> CaptureMsg {
+        CaptureMsg::Failed { source: Source::System, error: "device stopped".into() }
+    }
 
-    #[test]
-    fn nothing_is_sent_after_retire_even_from_a_stalled_callback() {
-        let (tx, rx) = crossbeam_channel::bounded(16);
-        let ctx = Arc::new(Ctx::new(tx, Arc::new(AtomicU64::new(0)), 1));
+    struct Relay {
+        callback: crossbeam_channel::Sender<CaptureMsg>,
+        engine: crossbeam_channel::Receiver<CaptureMsg>,
+        stop: Option<crossbeam_channel::Sender<()>>,
+        handle: std::thread::JoinHandle<()>,
+        dropped: Arc<AtomicU64>,
+    }
 
-        // Not accepted yet: nothing is forwarded.
-        ctx.with_sender(|tx| tx.try_send(audio()).unwrap());
-        assert!(rx.try_recv().is_err());
-        ctx.active.store(true, Ordering::SeqCst);
-        ctx.with_sender(|tx| tx.try_send(audio()).unwrap());
-        assert!(matches!(rx.try_recv(), Ok(CaptureMsg::Audio { .. })));
+    fn start(engine_capacity: usize) -> Relay {
+        let (callback, from) = crossbeam_channel::bounded(16);
+        let (to, engine) = crossbeam_channel::bounded(engine_capacity);
+        let (stop, stopped) = crossbeam_channel::bounded(1);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let counter = dropped.clone();
+        let handle = std::thread::spawn(move || relay(from, to, stopped, counter));
+        Relay { callback, engine, stop: Some(stop), handle, dropped }
+    }
 
-        // A callback that passed the active check stalls before its send.
-        let (entered, inside) = crossbeam_channel::bounded::<()>(0);
-        let stalled = {
-            let ctx = ctx.clone();
-            std::thread::spawn(move || {
-                ctx.with_sender(|tx| {
-                    entered.send(()).unwrap();
-                    std::thread::sleep(Duration::from_millis(150));
-                    tx.try_send(audio()).unwrap();
-                })
-            })
-        };
-        inside.recv().unwrap();
-        let started = Instant::now();
-        assert!(ctx.retire());
-        assert!(started.elapsed() >= Duration::from_millis(100), "retire waited for the callback");
-        // Its buffer landed before retire returned, so it precedes anything a replacement sends.
-        assert!(matches!(rx.try_recv(), Ok(CaptureMsg::Audio { .. })));
-        stalled.join().unwrap();
-
-        // After retire: no audio, and no late Failed either.
-        ctx.active.store(true, Ordering::SeqCst);
-        ctx.with_sender(|tx| tx.try_send(audio()).unwrap());
-        let (_stop, stopped) = crossbeam_channel::bounded::<()>(1);
-        report_failure(&ctx, "late", &stopped);
-        assert!(rx.try_recv().is_err());
+    /// Waits until the relay has taken everything from the private channel.
+    fn drained(r: &Relay) {
+        while !r.callback.is_empty() {
+            std::thread::yield_now();
+        }
     }
 
     #[test]
-    fn failure_waits_for_room_and_stops_audio() {
-        let (tx, rx) = crossbeam_channel::bounded(1);
-        let ctx = Arc::new(Ctx::new(tx, Arc::new(AtomicU64::new(0)), 1));
-        ctx.active.store(true, Ordering::SeqCst);
-        ctx.with_sender(|tx| tx.try_send(audio()).unwrap());
-        let (_stop, stopped) = crossbeam_channel::bounded::<()>(1);
-        let reporter = {
-            let ctx = ctx.clone();
-            std::thread::spawn(move || report_failure(&ctx, "device stopped", &stopped))
-        };
-        std::thread::sleep(Duration::from_millis(80));
-        assert!(matches!(rx.recv().unwrap(), CaptureMsg::Audio { .. }));
-        assert!(matches!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), CaptureMsg::Failed { .. }));
-        reporter.join().unwrap();
-        // Forwarding stopped with the failure.
-        ctx.with_sender(|tx| tx.try_send(audio()).unwrap());
-        assert!(rx.try_recv().is_err());
+    fn nothing_reaches_the_engine_after_stop() {
+        let mut r = start(16);
+        r.callback.send(audio()).unwrap();
+        assert!(matches!(r.engine.recv().unwrap(), CaptureMsg::Audio { .. }));
+        // `stop`: signal and join the relay.
+        r.stop.take().unwrap().send(()).unwrap();
+        r.handle.join().unwrap();
+        // A callback that stalled across `stop` (or the watcher) sends late: it can't get through,
+        // so the replacement stream sharing the engine channel never sees it.
+        assert!(r.callback.send(audio()).is_err());
+        assert!(r.callback.send(failed()).is_err());
+        assert!(r.engine.try_recv().is_err());
+    }
+
+    #[test]
+    fn audio_is_dropped_and_counted_when_the_engine_is_full() {
+        let r = start(1);
+        r.callback.send(audio()).unwrap();
+        r.callback.send(audio()).unwrap();
+        drained(&r);
+        while r.dropped.load(Ordering::Relaxed) == 0 {
+            std::thread::yield_now();
+        }
+        assert_eq!(r.engine.len(), 1);
+    }
+
+    #[test]
+    fn failed_waits_for_room_then_ends_the_stream() {
+        let r = start(1);
+        r.callback.send(audio()).unwrap();
+        r.callback.send(failed()).unwrap();
+        drained(&r);
+        // The relay holds `Failed` while the engine queue is full.
+        assert!(matches!(r.engine.recv().unwrap(), CaptureMsg::Audio { .. }));
+        assert!(matches!(r.engine.recv().unwrap(), CaptureMsg::Failed { .. }));
+        // Then it exits: audio a callback was still copying is not passed on after `Failed`.
+        r.handle.join().unwrap();
+        assert!(r.callback.send(audio()).is_err());
+        assert!(r.engine.try_recv().is_err());
+    }
+
+    #[test]
+    fn stop_wins_over_a_failed_waiting_for_room() {
+        let mut r = start(1);
+        r.callback.send(audio()).unwrap();
+        r.callback.send(failed()).unwrap();
+        drained(&r);
+        r.stop.take().unwrap().send(()).unwrap();
+        r.handle.join().unwrap();
+        // Only the audio that was already queued; the stopped stream's `Failed` never lands.
+        assert!(matches!(r.engine.try_recv(), Ok(CaptureMsg::Audio { .. })));
+        assert!(r.engine.try_recv().is_err());
     }
 
     #[test]
