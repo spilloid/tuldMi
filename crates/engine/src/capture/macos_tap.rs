@@ -120,7 +120,7 @@ fn ns(key: &CStr) -> Retained<NSString> {
 }
 
 /// How long `open` waits for coreaudiod before giving up (the engine retries every 3 s).
-const OPEN_TIMEOUT: Duration = Duration::from_secs(3);
+const OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 /// A previous open that has not returned yet (a stalled coreaudiod call) blocks new ones.
 static OPENING: AtomicBool = AtomicBool::new(false);
 
@@ -131,8 +131,12 @@ struct Ctx {
     tx: Sender<CaptureMsg>,
     dropped: Arc<AtomicU64>,
     channels: usize,
-    /// The IOProc forwards audio only while set. Cleared by `stop` and by the watcher on failure.
+    /// The IOProc forwards audio only while set. Set by `open` once the caller has accepted the
+    /// stream; cleared by `stop` and by the watcher on failure.
     active: AtomicBool,
+    /// IOProc invocations between their `active` check and the end of their send. `disable`
+    /// waits for this to reach zero, so nothing is forwarded once it returns.
+    in_flight: AtomicU64,
     /// Set by the IOProc when the buffer layout stops matching `Opened`; the watcher reports it.
     format_changed: AtomicBool,
 }
@@ -148,6 +152,19 @@ pub struct TapStream {
     watcher: Option<std::thread::JoinHandle<()>>,
 }
 
+impl Ctx {
+    /// Stops forwarding. On return no IOProc invocation will send anything more, even one that
+    /// was already running: each one raises `in_flight` before checking `active` (both SeqCst).
+    /// Callbacks only `try_send`, so the wait is short; it is capped regardless.
+    fn disable(&self) {
+        self.active.store(false, Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while self.in_flight.load(Ordering::SeqCst) != 0 && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+    }
+}
+
 impl CaptureStream for TapStream {
     fn source(&self) -> Source {
         Source::System
@@ -157,7 +174,7 @@ impl CaptureStream for TapStream {
     }
     fn stop(&mut self) {
         if let Some(ctx) = &self.ctx {
-            ctx.active.store(false, Ordering::Release);
+            ctx.disable();
         }
         if let Some(stop) = self.stop_watch.take() {
             let _ = stop.try_send(());
@@ -243,9 +260,15 @@ unsafe extern "C-unwind" fn io_proc(
     // SAFETY: `client` is `Arc::as_ptr` of the `Ctx` that `TapStream` keeps alive until this
     // IOProc is destroyed; only shared access happens here.
     let ctx = unsafe { &*(client as *const Ctx) };
-    if !ctx.active.load(Ordering::Acquire) {
-        return 0;
+    ctx.in_flight.fetch_add(1, Ordering::SeqCst);
+    if ctx.active.load(Ordering::SeqCst) {
+        forward(ctx, input);
     }
+    ctx.in_flight.fetch_sub(1, Ordering::SeqCst);
+    0
+}
+
+fn forward(ctx: &Ctx, input: NonNull<AudioBufferList>) {
     let list = input.as_ptr();
     // SAFETY: Core Audio passes a valid AudioBufferList whose trailing array holds
     // `mNumberBuffers` entries (the struct declares `[AudioBuffer; 1]` as a C flexible array).
@@ -257,7 +280,7 @@ unsafe extern "C-unwind" fn io_proc(
     let mut counts = Vec::with_capacity(raw.len());
     for b in raw {
         if b.mData.is_null() {
-            return 0;
+            return;
         }
         // SAFETY: the aggregate's input is the tap's Float32 stream (checked at open);
         // `mDataByteSize` bounds the readable bytes and Core Audio aligns sample buffers.
@@ -277,7 +300,6 @@ unsafe extern "C-unwind" fn io_proc(
         }
         None => ctx.format_changed.store(true, Ordering::Release),
     }
-    0
 }
 
 /// Opens the system tap. `tx` gets `Opened` before any `Audio`.
@@ -286,22 +308,31 @@ pub fn open(tx: Sender<CaptureMsg>) -> Result<Box<dyn CaptureStream>> {
         return Err(crate::Error::Device("system audio is still starting".into()));
     }
     let cancelled = Arc::new(AtomicBool::new(false));
-    let (ready, result) = crossbeam_channel::bounded::<Result<TapStream>>(1);
+    // Zero capacity: the stream changes hands only while the caller is still waiting. After a
+    // timeout the send fails and the stream is dropped (stopped) on this worker, never on the
+    // caller's thread.
+    let (ready, result) = crossbeam_channel::bounded::<Result<TapStream>>(0);
     let flag = cancelled.clone();
     let spawned = std::thread::Builder::new().name("tuldmi-tap-open".into()).spawn(move || {
         let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build(tx, &flag)))
             .unwrap_or_else(|_| Err(crate::Error::Device("system audio open panicked".into())));
         OPENING.store(false, Ordering::Release);
-        // If the caller already gave up, the stream is dropped (and stopped) right here or with
-        // the channel.
-        let _ = ready.send(built);
+        if let Err(crossbeam_channel::SendError(Ok(stream))) = ready.send(built) {
+            drop(stream);
+        }
     });
     if let Err(error) = spawned {
         OPENING.store(false, Ordering::Release);
         return Err(error.into());
     }
     match result.recv_timeout(OPEN_TIMEOUT) {
-        Ok(built) => built.map(|stream| Box::new(stream) as Box<dyn CaptureStream>),
+        Ok(built) => built.map(|stream| {
+            // Forwarding starts only now, so a cancelled or abandoned open never delivers audio.
+            if let Some(ctx) = &stream.ctx {
+                ctx.active.store(true, Ordering::SeqCst);
+            }
+            Box::new(stream) as Box<dyn CaptureStream>
+        }),
         Err(_) => {
             cancelled.store(true, Ordering::Release);
             Err(crate::Error::Device("system audio open timed out".into()))
@@ -386,9 +417,9 @@ fn build(tx: Sender<CaptureMsg>, cancelled: &AtomicBool) -> Result<TapStream> {
         // otherwise. Both are watched for changes.
         let aggregate_rate = get_property(stream.aggregate, kAudioDevicePropertyNominalSampleRate, 0f64)
             .ok()
-            .filter(|r| *r >= 8_000.0);
+            .filter(|r| plausible(*r));
         let rate = aggregate_rate.unwrap_or(format.mSampleRate);
-        if rate < 8_000.0 {
+        if !plausible(rate) {
             return Err(crate::Error::Device(format!("system audio reports an invalid sample rate ({rate})")));
         }
         tracing::info!(tap_rate = format.mSampleRate, rate, channels, "system audio tap ready");
@@ -397,7 +428,8 @@ fn build(tx: Sender<CaptureMsg>, cancelled: &AtomicBool) -> Result<TapStream> {
             tx: tx.clone(),
             dropped: dropped.clone(),
             channels,
-            active: AtomicBool::new(true),
+            active: AtomicBool::new(false),
+            in_flight: AtomicU64::new(0),
             format_changed: AtomicBool::new(false),
         });
         check(
@@ -430,7 +462,7 @@ fn build(tx: Sender<CaptureMsg>, cancelled: &AtomicBool) -> Result<TapStream> {
         }
 
         let (stop_watch, stopped) = crossbeam_channel::bounded::<()>(1);
-        let rates = Rates { aggregate: stream.aggregate, tap: stream.tap, aggregate_rate, tap_rate: format.mSampleRate };
+        let rates = Rates { aggregate: stream.aggregate, tap: stream.tap, advertised: rate, tap_rate: format.mSampleRate };
         stream.stop_watch = Some(stop_watch);
         stream.watcher = Some(
             std::thread::Builder::new()
@@ -445,12 +477,19 @@ fn build(tx: Sender<CaptureMsg>, cancelled: &AtomicBool) -> Result<TapStream> {
 struct Rates {
     aggregate: AudioObjectID,
     tap: AudioObjectID,
-    aggregate_rate: Option<f64>,
+    /// The rate sent in `Opened`: the aggregate's if readable, else the tap's.
+    advertised: f64,
     tap_rate: f64,
 }
 
-fn changed(now: f64, then: f64) -> bool {
-    (now - then).abs() > 0.5
+/// A usable sample rate. Anything else (0 during a reconfiguration, NaN) is ignored, not acted on.
+fn plausible(rate: f64) -> bool {
+    rate.is_finite() && (8_000.0..=768_000.0).contains(&rate)
+}
+
+/// A plausible reading that differs from the rate in effect.
+fn changed(now: Option<f64>, then: f64) -> bool {
+    now.is_some_and(|now| plausible(now) && (now - then).abs() > 0.5)
 }
 
 /// Polls for a dead aggregate device (e.g. coreaudiod restarted), a sample-rate change or a
@@ -472,8 +511,8 @@ fn watch(rates: Rates, ctx: Arc<Ctx>, stopped: crossbeam_channel::Receiver<()>) 
             if !matches!(alive, Ok(n) if n != 0) {
                 Some("system audio device stopped")
             } else if ctx.format_changed.load(Ordering::Acquire)
-                || matches!((aggregate_rate, rates.aggregate_rate), (Some(now), Some(then)) if changed(now, then))
-                || tap_rate.is_some_and(|now| changed(now, rates.tap_rate))
+                || changed(aggregate_rate, rates.advertised)
+                || changed(tap_rate, rates.tap_rate)
             {
                 Some("system audio format changed")
             } else {
@@ -481,7 +520,7 @@ fn watch(rates: Rates, ctx: Arc<Ctx>, stopped: crossbeam_channel::Receiver<()>) 
             }
         };
         if let Some(error) = failure {
-            ctx.active.store(false, Ordering::Release);
+            ctx.disable();
             crossbeam_channel::select! {
                 send(ctx.tx, CaptureMsg::Failed { source: Source::System, error: error.into() }) -> _ => (),
                 recv(stopped) -> _ => (),
@@ -493,7 +532,16 @@ fn watch(rates: Rates, ctx: Arc<Ctx>, stopped: crossbeam_channel::Receiver<()>) 
 
 #[cfg(test)]
 mod tests {
-    use super::interleave;
+    use super::{changed, interleave};
+
+    #[test]
+    fn only_plausible_rate_changes_count() {
+        assert!(changed(Some(44_100.0), 48_000.0));
+        assert!(!changed(Some(48_000.0), 48_000.0));
+        assert!(!changed(Some(0.0), 48_000.0));
+        assert!(!changed(Some(f64::NAN), 48_000.0));
+        assert!(!changed(None, 48_000.0));
+    }
 
     #[test]
     fn interleaved_buffer_is_copied() {
