@@ -1,4 +1,5 @@
-//! cpal capture. On WASAPI, input on a render endpoint enables LOOPBACK.
+//! cpal capture. On WASAPI, input on a render endpoint enables LOOPBACK. On macOS, system
+//! audio is delegated to `macos_tap`; Linux has no system source yet.
 //! Use its default OUTPUT config: default_input_config rejects render endpoints
 //! in cpal 0.18.2. Stream construction, playback, and destruction share one thread.
 use super::*;
@@ -121,6 +122,8 @@ impl AudioCaptureProvider for CpalProvider {
         let mut out = Vec::new();
         for source in [Source::Mic, Source::System] {
             if source == Source::System && !cfg!(target_os = "windows") {
+                #[cfg(target_os = "macos")]
+                out.push(super::macos_tap::device_info());
                 continue;
             }
             let default_id = self.default_device_id(source);
@@ -151,9 +154,14 @@ impl AudioCaptureProvider for CpalProvider {
         selected: Option<&str>,
         tx: Sender<CaptureMsg>,
     ) -> Result<Box<dyn CaptureStream>> {
+        // One tap covers all system audio on macOS, so a pinned id is irrelevant there.
+        #[cfg(target_os = "macos")]
+        if source == Source::System {
+            return super::macos_tap::open(tx);
+        }
         if source == Source::System && !cfg!(target_os = "windows") {
             return Err(crate::Error::Device(
-                "system capture is supported on Windows only".into(),
+                "system capture is not supported on this platform yet".into(),
             ));
         }
         let selected = selected.map(str::to_owned);
@@ -290,6 +298,10 @@ impl AudioCaptureProvider for CpalProvider {
         }
     }
     fn default_device_id(&self, source: Source) -> Option<String> {
+        #[cfg(target_os = "macos")]
+        if source == Source::System {
+            return Some(super::macos_tap::DEVICE_ID.into());
+        }
         let host = cpal::default_host();
         let default = default_device(&host, source)?;
         // WASAPI resolves symbolic defaults in Device::id().

@@ -2,6 +2,26 @@
 
 All notable changes to tuldMi are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **macOS preview (Apple Silicon, macOS 14.4+).** Microphone through Core Audio; system audio
+  through a Core Audio process tap that captures every app's sound, whichever output you use, and
+  leaves playback untouched. Distributed as a disk image built in CI, ad-hoc signed and **not
+  notarized** (Gatekeeper asks once; see docs/INSTALL.md).
+- macOS app behaviour: menu bar icon (click for the menu), app menu with ⌘Q, ⌘, and working
+  copy/paste, native traffic lights, Dock click reopens the window, ⌘-based shortcut labels.
+  The default pause shortcut on macOS is ⌥⌘` (macOS uses ⌘⇧` to cycle windows).
+  Copy says "menu bar" instead of "tray" on a Mac.
+- Settings show where to grant Microphone and System Audio Recording permission on macOS, since a
+  denied permission arrives as silence, not an error.
+
+### Known limitations
+
+- macOS: not notarized; each ad-hoc signed update asks for both permissions again; no Intel
+  build. Physical device changes on macOS have not been exercised beyond the default-device path.
+
 ## [0.1.1] — 2026-10-30
 
 ### Fixed

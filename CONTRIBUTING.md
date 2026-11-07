@@ -16,6 +16,17 @@ Thanks for helping. tuldMi handles people's conversations, so two rules outrank 
   set in `.cargo/config.toml`; change `LIBCLANG_PATH` if yours differs.
 - Node.js 22+ and npm
 
+## Setup (macOS, Apple Silicon)
+
+- Rust stable, Xcode command line tools, CMake (`brew install cmake`), Node.js 22+. The repo's
+  `rust-toolchain.toml` pins the Windows toolchain, so set `RUSTUP_TOOLCHAIN=stable`
+- `.cargo/config.toml` sets a Windows `LIBCLANG_PATH`; override it with Xcode's libclang:
+  `export LIBCLANG_PATH="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib"`
+- `npx tauri build --bundles app,dmg` builds an ad-hoc signed app and disk image (CI does the
+  same: `.github/workflows/macos.yml`)
+
+## Run
+
 ```
 npm install
 npm run tauri dev        # app with hot-reloading frontend

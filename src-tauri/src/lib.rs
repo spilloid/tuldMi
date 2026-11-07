@@ -93,8 +93,12 @@ pub fn run() {
         // Explicit quit (tray, `quit_app`): shut the engine down *now*, while the event loop is
         // still alive, so in-progress speech is flushed and persisted before teardown.
         RunEvent::ExitRequested { code: Some(_), .. } => shutdown(app),
-        // Fallback for exits that skip ExitRequested (e.g. Windows logoff). Idempotent.
+        // Fallback for exits that skip ExitRequested (e.g. Windows logoff, macOS log out).
+        // Idempotent.
         RunEvent::Exit => shutdown(app),
+        // Dock icon clicked while the window is hidden to the menu bar.
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => window::show_main(app),
         _ => {}
     });
 }
@@ -122,6 +126,8 @@ fn setup(app: &AppHandle) -> Result<(), String> {
     }
     // The tray exists before the engine can start capturing, so recording is never invisible.
     tray::create(app).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    mac_menu(app).map_err(|e| e.to_string())?;
 
     let sink = Arc::new(events::TauriSink::new(app.clone()));
     let engine = Engine::start(EngineConfig { data_dir: data_dir.clone(), vad_model_path, suppress_autostart: false }, sink).map_err(|e| e.to_string())?;
@@ -142,6 +148,41 @@ fn setup(app: &AppHandle) -> Result<(), String> {
     if !(minimized && settings.onboarding_complete) {
         window::show_main(app);
     }
+    Ok(())
+}
+
+/// The macOS app menu. Its Quit goes through `app.exit(0)` like the tray's, so Cmd+Q takes the
+/// `ExitRequested` path that flushes in-progress speech (the default menu's Quit would only reach
+/// the `RunEvent::Exit` fallback). The Edit menu is what makes Cmd+C/V/A work in the webview.
+#[cfg(target_os = "macos")]
+fn mac_menu(app: &AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItemBuilder, SubmenuBuilder};
+    let settings = MenuItemBuilder::with_id("app-settings", "Settings…").accelerator("Cmd+,").build(app)?;
+    let quit = MenuItemBuilder::with_id("app-quit", "Quit tuldMi").accelerator("Cmd+Q").build(app)?;
+    let app_menu = SubmenuBuilder::new(app, "tuldMi")
+        .about(None)
+        .separator()
+        .item(&settings)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .item(&quit)
+        .build()?;
+    let edit = SubmenuBuilder::new(app, "Edit").undo().redo().separator().cut().copy().paste().select_all().build()?;
+    let window = SubmenuBuilder::new(app, "Window").minimize().separator().close_window().build()?;
+    app.set_menu(Menu::with_items(app, &[&app_menu, &edit, &window])?)?;
+    app.on_menu_event(|app, event| match event.id().as_ref() {
+        "app-quit" => app.exit(0),
+        "app-settings" => {
+            window::show_main(app);
+            let _ = tauri::Emitter::emit(app, events::NAVIGATE, events::Navigate { view: "settings", section: None });
+        }
+        _ => {}
+    });
     Ok(())
 }
 

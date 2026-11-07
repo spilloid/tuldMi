@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DeviceInfo, Retention, Settings, StorageStats, Theme, VadSettings } from "../../lib/ipc/types";
 import { DEFAULT_VAD } from "../../lib/ipc/types";
 import { errorMessage } from "../../lib/ipc/backend";
-import { formatBytes, isMac } from "../../lib/platform";
+import { formatBytes, isMac, trayWord } from "../../lib/platform";
 import { DAY, startOfDay } from "../../lib/time";
 import { useBackend, useSettings, useStatus, useStore } from "../../state/hooks";
 import { Button } from "../../components/ui/Button";
@@ -577,7 +577,7 @@ export function ShortcutsSection() {
   if (!settings) return null;
   return (
     <>
-      <SectionHeader title="Shortcuts" description="One global shortcut pauses and resumes recording from anywhere — even when tuldMi is hidden in the tray." />
+      <SectionHeader title="Shortcuts" description={`One global shortcut pauses and resumes recording from anywhere — even when tuldMi is hidden in the ${trayWord()}.`} />
       <Group title="Global">
         <div className="px-4 py-4">
           <div className="flex items-center gap-4">
@@ -647,9 +647,9 @@ export function StartupSection() {
   if (!settings) return null;
   return (
     <>
-      <SectionHeader title="Startup" description="tuldMi lives in the system tray. Closing the window never stops recording — use Pause or Quit from the tray." />
+      <SectionHeader title="Startup" description={`tuldMi lives in the ${isMac() ? "menu bar" : "system tray"}. Closing the window never stops recording — use Pause or Quit from the ${trayWord()}.`} />
       <Group>
-        <Row label="Launch at login" description="Start tuldMi in the tray when you sign in. Off by default.">
+        <Row label="Launch at login" description={`Start tuldMi in the ${trayWord()} when you sign in. Off by default.`}>
           <Switch checked={settings.launchAtLogin} label="Launch at login" onCheckedChange={(v) => void save({ launchAtLogin: v })} />
         </Row>
         <Row label="Start recording when tuldMi starts" description="If off, tuldMi opens paused and waits for you to press Resume.">

@@ -49,21 +49,28 @@ what is **not** yet protected (no encryption at rest in v0.1.0): [docs/PRIVACY.m
 |---|---|
 | Windows 11 x64 | **Supported** — mic + WASAPI loopback (verified) |
 | Windows 10 x64 | **Unverified** — built for it, not yet tested on it |
-| macOS | Not yet — architecture ready (`AudioCaptureProvider`), needs a ScreenCaptureKit provider |
+| macOS 14.4+ Apple Silicon | **Preview** — mic (Core Audio) + system audio (Core Audio process tap); ad-hoc signed, not notarized |
 | Linux | Not yet — needs a PipeWire provider |
 
 ## Install
 
-Download `tuldMi_0.1.0_x64-setup.exe` from the GitHub release and run it (per-user install, no
-admin rights needed). The installer, the app and the uninstaller are Authenticode-signed
+**Windows:** download `tuldMi_<version>_x64-setup.exe` from the
+[latest release](https://github.com/spilloid/tuldMi/releases/latest) and run it (per-user install,
+no admin rights needed). The installer, the app and the uninstaller are Authenticode-signed
 (`CN=Joseph Spillers`, Azure Artifact Signing, RFC 3161 timestamped). As a new publisher, SmartScreen
 may still show a reputation prompt for the first downloads. Verify a download with
-`Get-AuthenticodeSignature .	uldMi_0.1.0_x64-setup.exe` and the published `.sha256`.
+`Get-AuthenticodeSignature` and the published `.sha256`.
+
+**macOS (Apple Silicon, 14.4+):** download `tuldMi_<version>_aarch64.dmg` and drag tuldMi to
+Applications. It is ad-hoc signed but **not notarized** yet, so macOS blocks the first open: open
+it once, then choose *Open Anyway* in System Settings → Privacy & Security. Check the download
+against the published `.sha256` (`shasum -a 256 -c`). Details: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Develop
 
-Requirements: Rust (MSVC toolchain), Visual Studio Build Tools (C++), LLVM (libclang), Node 22+.
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+Requirements: Rust stable, Node 22+, and a C/C++ toolchain with CMake and libclang (Windows:
+Visual Studio Build Tools + LLVM; macOS: Xcode command line tools + CMake). See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```
 npm install
@@ -75,12 +82,15 @@ cargo test -p tuldmi-engine
 Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · IPC contract: [docs/IPC.md](docs/IPC.md) ·
 Models and licenses: [docs/MODELS.md](docs/MODELS.md) · Releasing: [docs/RELEASE.md](docs/RELEASE.md)
 
-## Current limitations (v0.1.0)
+## Current limitations
 
-- Windows only.
+- macOS is a preview: Apple Silicon and macOS 14.4+ only, not notarized, and because each build
+  is ad-hoc signed macOS asks for microphone and system-audio permission again after an update.
+  If permission is denied, macOS delivers silence rather than an error.
+- No Linux build yet.
 - "Remote" is everything your computer plays; individual remote speakers are **not** identified
   (no diarization yet).
-- No encryption at rest (database and audio are protected by your Windows account / disk
+- No encryption at rest (database and audio are protected by your OS account / disk
   encryption only).
 - CPU transcription only (no GPU acceleration yet); large models are slow on modest CPUs.
 - Physically unplugging a device and switching the default device are handled in code and in

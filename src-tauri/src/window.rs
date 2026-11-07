@@ -17,6 +17,24 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
+/// "CommandOrControl+Shift+Backquote" as the user reads it: "Ctrl+Shift+`" or "⌘⇧`".
+fn shortcut_label(accelerator: &str) -> String {
+    let mac = cfg!(target_os = "macos");
+    let keys: Vec<&str> = accelerator
+        .split('+')
+        .map(|k| match k {
+            "CommandOrControl" | "CmdOrCtrl" => if mac { "⌘" } else { "Ctrl" },
+            "Shift" => if mac { "⇧" } else { "Shift" },
+            "Alt" => if mac { "⌥" } else { "Alt" },
+            "Control" | "Ctrl" => if mac { "⌃" } else { "Ctrl" },
+            "Backquote" => "`",
+            "Comma" => ",",
+            other => other,
+        })
+        .collect();
+    keys.join(if mac { "" } else { "+" })
+}
+
 pub fn on_event(window: &Window, event: &WindowEvent) {
     if window.label() != "main" {
         return;
@@ -46,13 +64,15 @@ pub fn on_event(window: &Window, event: &WindowEvent) {
         return;
     }
     let _ = std::fs::write(&marker, b"1");
-    let shortcut = state.engine.settings().pause_shortcut.replace("CommandOrControl", "Ctrl").replace("Backquote", "`");
+    let shortcut = shortcut_label(&state.engine.settings().pause_shortcut);
+    let tray = if cfg!(target_os = "macos") { "menu bar icon" } else { "tray icon" };
+    let tray_place = if cfg!(target_os = "macos") { "menu bar" } else { "tray" };
     let engine = state.engine.clone();
     let win = window.clone();
     app.dialog()
         .message(format!(
             "tuldMi keeps recording in the background after you close this window.\n\n\
-             The tray icon shows when it is listening. Pause any time from the tray or with {shortcut}."
+             The {tray} shows when it is listening. Pause any time from the {tray_place} or with {shortcut}."
         ))
         .title("tuldMi is still listening")
         .kind(MessageDialogKind::Info)
@@ -67,4 +87,19 @@ pub fn on_event(window: &Window, event: &WindowEvent) {
             }
             let _ = win.hide();
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shortcut_label;
+
+    #[test]
+    fn default_pause_shortcut_reads_naturally() {
+        let label = shortcut_label("CommandOrControl+Shift+Backquote");
+        if cfg!(target_os = "macos") {
+            assert_eq!(label, "⌘⇧`");
+        } else {
+            assert_eq!(label, "Ctrl+Shift+`");
+        }
+    }
 }

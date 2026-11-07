@@ -1,28 +1,32 @@
 import { Minus, Search, Square, X, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { windowControls } from "../../lib/window";
+import { isMac } from "../../lib/platform";
 import { Tooltip } from "../ui/Tooltip";
 import { Keys } from "../ui/Kbd";
 import { Logo } from "./Logo";
 
 export function Titlebar({ demo, onSearch, title }: { demo: boolean; onSearch?: () => void; title?: string }) {
   const native = windowControls.available();
+  // macOS keeps its own traffic lights (overlay title bar, see tauri.macos.conf.json); leave
+  // room for them on the left and draw no Windows-style buttons.
+  const mac = isMac();
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
-    if (!native) return;
+    if (!native || mac) return;
     let off: (() => void) | undefined;
     const sync = () => void windowControls.isMaximized().then(setMaximized);
     sync();
     void windowControls.onResized(sync).then((u) => (off = u));
     return () => off?.();
-  }, [native]);
+  }, [native, mac]);
 
   return (
     <header
       data-tauri-drag-region
-      className="relative z-30 flex h-[var(--tm-titlebar-h)] shrink-0 items-center border-b border-line-soft bg-canvas pl-3"
+      className={`relative z-30 flex h-[var(--tm-titlebar-h)] shrink-0 items-center border-b border-line-soft bg-canvas ${native && mac ? "pl-[78px]" : "pl-3"}`}
     >
-      <div data-tauri-drag-region className="flex w-[220px] min-w-0 items-center gap-2">
+      <div data-tauri-drag-region className={`flex ${native && mac ? "w-[142px]" : "w-[220px]"} min-w-0 items-center gap-2`}>
         <Logo size={20} />
         <span data-tauri-drag-region className="font-display text-[15.5px] font-[560] tracking-[-0.01em] text-text">
           tuldMi
@@ -46,7 +50,7 @@ export function Titlebar({ demo, onSearch, title }: { demo: boolean; onSearch?: 
       </div>
 
       <div className="flex w-[220px] items-center justify-end self-stretch">
-        {native && (
+        {native && !mac && (
           <div className="flex h-full">
             <WinButton label="Minimize" onClick={() => void windowControls.minimize()}>
               <Minus size={15} strokeWidth={1.5} />

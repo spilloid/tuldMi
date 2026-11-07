@@ -18,6 +18,9 @@ exactly what happens to your audio, in plain terms, and what tuldMi does **not**
 
 Nowhere. Everything stays on your computer:
 
+Paths below are for Windows; on macOS the folder is
+`~/Library/Application Support/com.spillerstech.tuldmi/`.
+
 | What | Where (Windows) |
 |---|---|
 | Transcripts, settings, index | `%APPDATA%\com.spillerstech.tuldmi\tuldmi.db` |
@@ -69,8 +72,8 @@ people you're using tuldMi, or pause it.
 
 ## Not yet (honest limits of v0.1.0)
 
-- **No encryption at rest.** The database and audio files are protected only by your Windows
-  account and disk encryption (e.g. BitLocker). Anyone with access to your user account can read
+- **No encryption at rest.** The database and audio files are protected only by your OS
+  account and disk encryption (e.g. BitLocker, FileVault). Anyone with access to your user account can read
   them. Database encryption (SQLCipher) and per-file audio encryption with OS-keychain keys are
   planned; tuldMi will not show a password or "encrypted" toggle until that actually protects
   the data.

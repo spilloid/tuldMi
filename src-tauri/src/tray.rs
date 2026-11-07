@@ -61,7 +61,8 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         .icon(icons::tray(Glyph::Idle))
         .tooltip("tuldMi")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        // macOS menu-bar convention: a click opens the menu. Elsewhere left-click opens the window.
+        .show_menu_on_left_click(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id().as_ref() {
             "toggle" => crate::toggle_pause(app),
             "open" => crate::window::show_main(app),
@@ -73,6 +74,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
+            if cfg!(target_os = "macos") {
+                return;
+            }
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                 crate::window::show_main(tray.app_handle());
             }

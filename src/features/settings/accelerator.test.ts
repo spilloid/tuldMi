@@ -24,6 +24,7 @@ describe("acceleratorFromEvent", () => {
     expect(acceleratorFromEvent(k("ShiftLeft", { shiftKey: true }), false)).toBeNull();
   });
   it("renders accelerators as readable keycaps", () => {
-    expect(acceleratorParts("CommandOrControl+Shift+Backquote")).toEqual(["Ctrl", "Shift", "`"]);
+    expect(acceleratorParts("CommandOrControl+Shift+Backquote", false)).toEqual(["Ctrl", "Shift", "`"]);
+    expect(acceleratorParts("CommandOrControl+Alt+Backquote", true)).toEqual(["⌘", "⌥", "`"]);
   });
 });

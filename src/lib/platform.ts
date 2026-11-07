@@ -4,6 +4,11 @@ export function isMac(): boolean {
   return /mac/i.test(p);
 }
 
+/** Where the always-visible status icon lives: the menu bar on macOS, the tray elsewhere. */
+export function trayWord(): "menu bar" | "tray" {
+  return isMac() ? "menu bar" : "tray";
+}
+
 /** Ctrl on Windows/Linux, Cmd on macOS. */
 export function isModKey(e: { ctrlKey: boolean; metaKey: boolean }): boolean {
   return isMac() ? e.metaKey : e.ctrlKey;

@@ -4,8 +4,9 @@
 //! Implementations:
 //! - `cpal_provider::CpalProvider` — Windows WASAPI via cpal: microphone input streams, and
 //!   system audio by opening an *input* stream on a render (output) device, which cpal maps to
-//!   WASAPI loopback. macOS (ScreenCaptureKit / Core Audio taps) and Linux (PipeWire monitor
-//!   sources) are future providers behind the same trait.
+//!   WASAPI loopback. On macOS the microphone also goes through cpal (Core Audio) and system
+//!   audio through `macos_tap` (a Core Audio process tap). Linux (PipeWire monitor sources) is
+//!   a future provider behind the same trait.
 //! - `fake::FakeProvider` — deterministic, device-free provider for tests: plays given sample
 //!   buffers in real time (or as fast as possible) then idles with silence.
 //!
@@ -17,6 +18,8 @@
 
 pub mod cpal_provider;
 pub mod fake;
+#[cfg(target_os = "macos")]
+pub mod macos_tap;
 
 use std::time::Instant;
 
