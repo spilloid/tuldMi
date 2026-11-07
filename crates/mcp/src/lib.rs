@@ -67,13 +67,26 @@ impl McpServer {
                     Snapshot { store: None, ceiling: Ceiling::off(), problem: Some("tuldMi's settings could not be read".into()) }
                 }
             },
-            // The error names a state (missing, newer, older), never content.
-            Err(error) => Snapshot { store: None, ceiling: Ceiling::off(), problem: Some(error.to_string()) },
+            // A fixed description, never the engine's error text.
+            Err(_) => {
+                let problem = if self.data_dir.join("tuldmi.db").is_file() {
+                    "tuldMi's history could not be read (if tuldMi was just updated, open it once)"
+                } else {
+                    "there is no tuldMi history on this computer yet"
+                };
+                Snapshot { store: None, ceiling: Ceiling::off(), problem: Some(problem.into()) }
+            }
         }
     }
 
     /// Handles one JSON-RPC message; `None` for notifications and client responses (no reply).
     pub fn handle(&self, message: &Value) -> Option<Value> {
+        self.handle_as(message, None)
+    }
+
+    /// `version`: the protocol negotiated on this connection, which decides what content types
+    /// a result may use (audio content arrived after 2024-11-05).
+    fn handle_as(&self, message: &Value, version: Option<&'static str>) -> Option<Value> {
         let Some(obj) = message.as_object() else {
             return Some(invalid("a JSON-RPC message must be an object"));
         };
@@ -112,8 +125,8 @@ impl McpServer {
                 }
             }
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": tools::list(&self.snapshot().ceiling) })),
-            "tools/call" => self.call(&params),
+            "tools/list" => Ok(json!({ "tools": tools::list(&self.snapshot().ceiling, version) })),
+            "tools/call" => self.call(&params, version),
             other => Err((-32601, format!("method not found: {}", clip(other, 64)))),
         };
         Some(match result {
@@ -143,7 +156,7 @@ impl McpServer {
         })
     }
 
-    fn call(&self, params: &Value) -> Result<Value, (i64, String)> {
+    fn call(&self, params: &Value, version: Option<&'static str>) -> Result<Value, (i64, String)> {
         let name = params.get("name").and_then(Value::as_str).ok_or((-32602, "tools/call needs a tool name".to_string()))?;
         let args = match params.get("arguments") {
             None | Some(Value::Null) => json!({}),
@@ -153,7 +166,7 @@ impl McpServer {
         let call_number = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
         let started = std::time::Instant::now();
         let snapshot = self.snapshot();
-        let (result, count, tool, decision) = match tools::call(self, &snapshot, name, &args) {
+        let (result, count, tool, decision) = match tools::call(self, &snapshot, version, name, &args) {
             Ok(done) => (done.result, done.count, done.tool, "executed"),
             Err(tools::ToolError::Unknown) => {
                 tracing::info!(channel = "mcp", process_id = std::process::id(), call = call_number, tool = "unknown", decision = "refused", "mcp call");
@@ -211,7 +224,7 @@ impl Session {
             return Some(json!({ "jsonrpc": "2.0", "id": message["id"],
                 "error": { "code": -32600, "message": "complete initialization once before using tools" } }));
         }
-        let reply = server.handle(message);
+        let reply = server.handle_as(message, self.version);
         if method == Some("initialize")
             && let Some(version) = reply.as_ref().and_then(|r| r.pointer("/result/protocolVersion")).and_then(Value::as_str)
         {

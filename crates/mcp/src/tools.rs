@@ -23,6 +23,10 @@ const CONVERSATION_GAP_MS: i64 = 3 * 60_000;
 /// How far around a time `conversation_at` looks, and how many events a conversation returns.
 const CONVERSATION_REACH_MS: i64 = 6 * 3_600_000;
 const MAX_CONVERSATION_EVENTS: usize = 200;
+/// How many events `conversation_at` reads on each side of the requested time.
+const CONVERSATION_SIDE_LIMIT: u32 = 500;
+/// The protocol version without audio content.
+const NO_AUDIO_VERSION: &str = "2024-11-05";
 /// Exit code of `tuldmi --pause` when no tuldMi was running (src-tauri `PAUSE_NOT_RUNNING`).
 const PAUSE_NOT_RUNNING: i32 = 3;
 
@@ -232,8 +236,9 @@ pub fn all_names() -> Vec<&'static str> {
     DEFS.iter().map(|d| d.name).collect()
 }
 
-/// Whether the ceiling lets this tool be listed and called; `Err` says why not.
-fn allowed(ceiling: &Ceiling, name: &str) -> Result<(), String> {
+/// Whether the ceiling (and the negotiated protocol) let this tool be listed and called; `Err`
+/// says why not.
+fn allowed(ceiling: &Ceiling, version: Option<&str>, name: &str) -> Result<(), String> {
     if name == "get_status" {
         return Ok(());
     }
@@ -243,13 +248,16 @@ fn allowed(ceiling: &Ceiling, name: &str) -> Result<(), String> {
     if name == "get_audio" && !ceiling.allow_audio {
         return Err("Audio is not shared with assistants. The person can allow it in tuldMi: Settings > Privacy & data > AI assistants.".into());
     }
+    if name == "get_audio" && version == Some(NO_AUDIO_VERSION) {
+        return Err(format!("Audio content needs MCP protocol 2025-03-26 or later; this connection uses {NO_AUDIO_VERSION}."));
+    }
     Ok(())
 }
 
 /// The advertised tools for this ceiling.
-pub fn list(ceiling: &Ceiling) -> Vec<Value> {
+pub fn list(ceiling: &Ceiling, version: Option<&str>) -> Vec<Value> {
     DEFS.iter()
-        .filter(|d| allowed(ceiling, d.name).is_ok())
+        .filter(|d| allowed(ceiling, version, d.name).is_ok())
         .map(|d| {
             let mut tool = json!({
                 "name": d.name,
@@ -272,18 +280,21 @@ pub fn list(ceiling: &Ceiling) -> Vec<Value> {
         .collect()
 }
 
-pub fn call(server: &McpServer, snapshot: &Snapshot, name: &str, args: &Value) -> Result<Done, ToolError> {
+pub fn call(server: &McpServer, snapshot: &Snapshot, version: Option<&str>, name: &str, args: &Value) -> Result<Done, ToolError> {
     let def = DEFS.iter().find(|d| d.name == name).ok_or(ToolError::Unknown)?;
     let tool = def.name;
     let refuse = |message: String| ToolError::Refused(tool, message);
     let ceiling = &snapshot.ceiling;
-    allowed(ceiling, tool).map_err(refuse)?;
+    allowed(ceiling, version, tool).map_err(refuse)?;
     validate(def, args).map_err(refuse)?;
     if tool == "get_status" {
         return get_status(snapshot).map(|done| Done { tool, ..done }).map_err(refuse);
     }
     if tool == "pause_recording" {
         return pause(server).map(|done| Done { tool, ..done }).map_err(refuse);
+    }
+    if snapshot.store.is_none() {
+        return Err(refuse(snapshot.problem.clone().unwrap_or_else(|| "tuldMi's history could not be read".into())));
     }
     let store = snapshot.store.as_ref().ok_or_else(|| refuse(snapshot.problem.clone().unwrap_or_else(|| "tuldMi's history could not be read".into())))?;
     let now = chrono::Local::now();
@@ -364,8 +375,9 @@ fn search(store: &Store, ceiling: &Ceiling, args: &Value, now: chrono::DateTime<
     let sources = sources(ceiling, args)?;
     let from = ceiling.clamp_from(time_arg(args, "from", now)?);
     let to = time_arg(args, "to", now)?;
+    // Newest first, not by relevance: bm25's statistics span hidden transcripts too.
     let hits = store
-        .search(&SearchQuery { text: query.into(), sources, from, to, limit: Some(int_arg(args, "limit", 20) as u32) })
+        .search_by_time(&SearchQuery { text: query.into(), sources, from, to, limit: Some(int_arg(args, "limit", 20) as u32) })
         .map_err(|_| "search failed".to_string())?;
     let matches: Vec<Value> = hits
         .iter()
@@ -420,19 +432,28 @@ fn conversations(events: Vec<SpeechEvent>) -> Vec<Vec<SpeechEvent>> {
 
 fn conversation_at(store: &Store, ceiling: &Ceiling, args: &Value, now: chrono::DateTime<chrono::Local>) -> ToolResult {
     let at = time_arg(args, "time", now)?.unwrap_or_default();
-    let filter = EventFilter {
+    let sources = sources(ceiling, args)?;
+    let read = |filter: EventFilter| store.events_matching(&filter).map_err(|_| "could not read the history".to_string());
+    // Read outward from the requested time, so busy hours before it can't crowd it out.
+    let mut before = read(EventFilter {
         from: ceiling.clamp_from(Some(at - CONVERSATION_REACH_MS)),
+        to: Some(at),
+        sources: sources.clone(),
+        newest_first: true,
+        limit: CONVERSATION_SIDE_LIMIT,
+    })?;
+    let after = read(EventFilter {
+        from: ceiling.clamp_from(Some(at)),
         to: Some(at + CONVERSATION_REACH_MS),
-        sources: sources(ceiling, args)?,
+        sources,
         newest_first: false,
-        limit: 2_000,
-    };
-    let events: Vec<SpeechEvent> = store
-        .events_matching(&filter)
-        .map_err(|_| "could not read the history".to_string())?
-        .into_iter()
-        .filter(|e| ceiling.admits(e.source, e.started_at))
-        .collect();
+        limit: CONVERSATION_SIDE_LIMIT,
+    })?;
+    // A full side may have more events beyond what was read.
+    let earliest_read = (before.len() as u32 == CONVERSATION_SIDE_LIMIT).then(|| before.last().map(|e| e.id)).flatten();
+    let latest_read = (after.len() as u32 == CONVERSATION_SIDE_LIMIT).then(|| after.last().map(|e| e.id)).flatten();
+    before.reverse();
+    let events: Vec<SpeechEvent> = before.into_iter().chain(after).filter(|e| ceiling.admits(e.source, e.started_at)).collect();
     let found = conversations(events).into_iter().find(|group| {
         let start = group.first().map_or(i64::MAX, |e| e.started_at);
         let end = group.iter().map(|e| e.ended_at).max().unwrap_or(i64::MIN);
@@ -441,7 +462,8 @@ fn conversation_at(store: &Store, ceiling: &Ceiling, args: &Value, now: chrono::
     let Some(group) = found else {
         return ok(format!("No conversation within 3 minutes of {}.", time_text(at)), json!({ "conversation": null, "truncated": false }), 0);
     };
-    let truncated = group.len() > MAX_CONVERSATION_EVENTS;
+    let cut_short = group.iter().any(|e| Some(e.id) == earliest_read || Some(e.id) == latest_read);
+    let truncated = cut_short || group.len() > MAX_CONVERSATION_EVENTS;
     let shown = &group[..group.len().min(MAX_CONVERSATION_EVENTS)];
     let started = shown.first().map(|e| e.started_at).unwrap_or(at);
     let ended = group.iter().map(|e| e.ended_at).max().unwrap_or(at);
@@ -463,8 +485,9 @@ fn conversation_at(store: &Store, ceiling: &Ceiling, args: &Value, now: chrono::
 fn shared_event(store: &Store, ceiling: &Ceiling, args: &Value) -> Result<SpeechEvent, String> {
     let not_found = || "No shared event has that id.".to_string();
     let id = Uuid::parse_str(str_arg(args, "id").unwrap_or_default().trim()).map_err(|_| not_found())?;
+    // The ceiling is part of the query, so a hidden event is never even loaded.
     store
-        .get_event(id)
+        .get_event_matching(id, ceiling.oldest, &ceiling.sources())
         .map_err(|_| "could not read the history".to_string())?
         .filter(|e| ceiling.admits(e.source, e.started_at))
         .ok_or_else(not_found)
@@ -545,8 +568,12 @@ fn get_status(snapshot: &Snapshot) -> ToolResult {
 
 fn pause(server: &McpServer) -> ToolResult {
     let app = server.app_exe.as_ref().ok_or("tuldMi's app wasn't found next to tuldmi-mcp, so it can't be paused from here.")?;
+    let token = Uuid::new_v4();
+    let ack = server.data_dir.join("mcp").join(token.to_string());
     let mut child = std::process::Command::new(app)
         .arg("--pause")
+        .arg("--pause-ack")
+        .arg(token.to_string())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -564,9 +591,27 @@ fn pause(server: &McpServer) -> ToolResult {
         }
     };
     match status.code() {
-        Some(0) => ok("Paused. Recording stays paused until the person resumes it.".into(), json!({ "paused": true, "running": true }), 1),
-        Some(PAUSE_NOT_RUNNING) => ok("tuldMi isn't running, so nothing is being recorded.".into(), json!({ "paused": false, "running": false }), 0),
-        _ => Err("tuldMi could not be paused.".into()),
+        Some(PAUSE_NOT_RUNNING) => return ok("tuldMi isn't running, so nothing is being recorded.".into(), json!({ "paused": false, "running": false }), 0),
+        Some(0) => {}
+        _ => return Err("tuldMi could not be asked to pause.".into()),
+    }
+    // Exit 0 only means the request reached the running app; its answer is the acknowledgement.
+    let outcome = loop {
+        match std::fs::read_to_string(&ack) {
+            Ok(outcome) => {
+                let _ = std::fs::remove_file(&ack);
+                break outcome;
+            }
+            Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(_) => return Err("tuldMi didn't confirm the pause. Ask the person to check its tray or menu bar icon.".into()),
+        }
+    };
+    match outcome.trim() {
+        "paused" => ok("Paused. Recording stays paused until the person resumes it.".into(), json!({ "paused": true, "running": true }), 1),
+        "not-recording" => ok("tuldMi wasn't recording (already paused or stopped), so nothing changed.".into(), json!({ "paused": false, "running": true }), 0),
+        "not-set-up" => ok("tuldMi hasn't been set up yet, so nothing is being recorded.".into(), json!({ "paused": false, "running": true }), 0),
+        "starting" => Err("tuldMi is still starting; try again in a moment.".into()),
+        _ => Err("tuldMi could not pause. Ask the person to pause it from its tray or menu bar icon.".into()),
     }
 }
 
@@ -577,7 +622,8 @@ mod tests {
     #[test]
     fn every_tool_has_annotations_and_object_schemas() {
         let all = Ceiling { enabled: true, include_remote: true, allow_audio: true, oldest: None };
-        let tools = list(&all);
+        let tools = list(&all, None);
+        assert!(list(&all, Some(NO_AUDIO_VERSION)).iter().all(|t| t["name"] != "get_audio"), "no audio content in 2024-11-05");
         assert_eq!(tools.len(), DEFS.len());
         for tool in &tools {
             assert_eq!(tool["inputSchema"]["type"], "object");
@@ -591,7 +637,7 @@ mod tests {
 
     #[test]
     fn the_ceiling_decides_what_is_offered() {
-        let names = |c: &Ceiling| list(c).iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let names = |c: &Ceiling| list(c, None).iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
         assert_eq!(names(&Ceiling::off()), vec!["get_status"]);
         let text_only = Ceiling { enabled: true, include_remote: false, allow_audio: false, oldest: None };
         assert!(!names(&text_only).contains(&"get_audio".to_string()));

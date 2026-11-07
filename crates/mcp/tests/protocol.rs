@@ -98,9 +98,13 @@ impl Client {
     }
 
     fn ready(dir: &Path) -> Client {
+        Client::ready_with(dir, "2025-06-18")
+    }
+
+    fn ready_with(dir: &Path, version: &str) -> Client {
         let mut client = Client::start(dir);
-        let init = client.request("initialize", json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } }));
-        assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+        let init = client.request("initialize", json!({ "protocolVersion": version, "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } }));
+        assert_eq!(init["result"]["protocolVersion"], version);
         assert_eq!(init["result"]["serverInfo"]["name"], "tuldmi");
         client.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
         client
@@ -238,4 +242,56 @@ fn a_missing_history_means_access_off() {
     assert!(status["content"][0]["text"].as_str().unwrap().contains("no tuldMi history"));
     c.finish();
     assert!(!empty.path().join("tuldmi.db").exists());
+}
+
+#[test]
+fn remote_audio_stays_hidden_while_remote_is_off() {
+    let h = history();
+    set(h.dir.path(), on(false, true));
+    let mut c = Client::ready(h.dir.path());
+    assert!(c.tools().contains(&"get_audio".to_string()));
+    let refused = c.call("get_audio", json!({ "id": h.remote.to_string() }));
+    assert_eq!(refused["isError"], true);
+    assert!(refused["content"][0]["text"].as_str().unwrap().contains("No shared event"), "same answer as a missing id");
+    let missing = c.call("get_audio", json!({ "id": Uuid::new_v4().to_string() }));
+    assert_eq!(missing["content"][0]["text"], refused["content"][0]["text"]);
+    c.finish();
+}
+
+#[test]
+fn audio_is_not_offered_on_the_oldest_protocol() {
+    let h = history();
+    set(h.dir.path(), on(true, true));
+    let mut c = Client::ready_with(h.dir.path(), "2024-11-05");
+    assert!(!c.tools().contains(&"get_audio".to_string()));
+    assert_eq!(c.call("get_audio", json!({ "id": h.remote.to_string() }))["isError"], true);
+    c.finish();
+}
+
+#[test]
+fn a_busy_history_cannot_crowd_out_the_conversation_asked_for() {
+    let h = history();
+    set(h.dir.path(), on(true, false));
+    // 600 events a minute apart, ending 10 minutes before the one asked about: one long
+    // conversation that is not the one at the requested time.
+    let store = Store::open(h.dir.path()).unwrap();
+    let session = store.start_session(0).unwrap();
+    let target = now() - 2 * 3_600_000;
+    for i in 0..600 {
+        let at = target - 10 * 60_000 - (600 - i) * 60_000;
+        store.insert_event(&NewEvent { session_id: session.id, source: Source::Mic, started_at: at, ended_at: at + 1_000, audio: None }).unwrap();
+    }
+    let asked = store.insert_event(&NewEvent { session_id: session.id, source: Source::Mic, started_at: target, ended_at: target + 1_000, audio: None }).unwrap();
+    drop(store);
+    let mut c = Client::ready(h.dir.path());
+    let at = chrono::DateTime::from_timestamp_millis(target).unwrap().to_rfc3339();
+    let conversation = c.call("conversation_at", json!({ "time": at }));
+    let events = conversation["structuredContent"]["conversation"]["events"].as_array().expect("found");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["id"], asked.id.to_string());
+    // Asked inside the long one: it is longer than what is read, and says so.
+    let inside = chrono::DateTime::from_timestamp_millis(target - 10 * 60_000 - 60_000).unwrap().to_rfc3339();
+    let long = c.call("conversation_at", json!({ "time": inside }));
+    assert_eq!(long["structuredContent"]["truncated"], true);
+    c.finish();
 }

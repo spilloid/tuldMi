@@ -31,7 +31,8 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if args.iter().any(|a| a == PAUSE_ARG) {
-                pause_by_request(app);
+                let ack = args.iter().position(|a| a == PAUSE_ACK_ARG).and_then(|i| args.get(i + 1)).and_then(|t| uuid::Uuid::parse_str(t).ok());
+                pause_by_request(app, ack);
             } else {
                 window::show_main(app);
             }
@@ -121,26 +122,55 @@ pub fn is_exiting() -> bool {
 pub const PAUSE_ARG: &str = "--pause";
 /// Exit code of `tuldmi --pause` when no tuldMi was running: nothing is started.
 pub const PAUSE_NOT_RUNNING: i32 = 3;
+/// `--pause-ack <uuid>`: when the request has been handled, the running app writes the outcome
+/// to `<data dir>/mcp/<uuid>` (`paused`, `not-recording`, `not-set-up`, `starting`, `failed`).
+/// The plugin's own exit code only says the request was handed over, not that it worked.
+pub const PAUSE_ACK_ARG: &str = "--pause-ack";
+
+fn write_pause_ack(app: &AppHandle, token: Option<uuid::Uuid>, outcome: &str) {
+    let Some(token) = token else { return };
+    let Ok(dir) = app.path().app_data_dir().map(|d| d.join("mcp")) else { return };
+    // Written whole, then renamed, so the reader never sees a partial outcome.
+    let partial = dir.join(format!("{token}.partial"));
+    let result = std::fs::create_dir_all(&dir)
+        .and_then(|()| std::fs::write(&partial, outcome))
+        .and_then(|()| std::fs::rename(&partial, dir.join(token.to_string())));
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "pause acknowledgement not written");
+    }
+}
 
 /// Pause, never resume, at another process's request (`tuldmi --pause`). The same path as the
 /// tray, so the icon shows it. Already paused (or not set up yet) stays as it is.
-fn pause_by_request(app: &AppHandle) {
-    let Some(state) = app.try_state::<AppState>() else { return };
+fn pause_by_request(app: &AppHandle, ack: Option<uuid::Uuid>) {
+    let Some(state) = app.try_state::<AppState>() else {
+        write_pause_ack(app, ack, "starting");
+        return;
+    };
     let engine = state.engine.clone();
+    let handle = app.clone();
     let spawned = std::thread::Builder::new().name("tuldmi-pause-request".into()).spawn(move || {
         let _serial = TOGGLE.lock();
-        if !engine.settings().onboarding_complete {
-            return;
-        }
-        if matches!(engine.status().state, CaptureState::Recording | CaptureState::Starting | CaptureState::Error) {
-            tracing::info!("paused at the request of another program (tuldmi --pause)");
-            if let Err(e) = engine.set_paused(true) {
-                tracing::warn!(error = %e, "pause request failed");
+        let outcome = if !engine.settings().onboarding_complete {
+            "not-set-up"
+        } else if matches!(engine.status().state, CaptureState::Recording | CaptureState::Starting | CaptureState::Error) {
+            tracing::info!("pausing at the request of another program (tuldmi --pause)");
+            match engine.set_paused(true) {
+                Ok(status) if status.state == CaptureState::Paused => "paused",
+                Ok(_) => "failed",
+                Err(e) => {
+                    tracing::warn!(error = %e, "pause request failed");
+                    "failed"
+                }
             }
-        }
+        } else {
+            "not-recording"
+        };
+        write_pause_ack(&handle, ack, outcome);
     });
     if let Err(e) = spawned {
         tracing::warn!(error = %e, "pause request thread failed to start");
+        write_pause_ack(app, ack, "failed");
     }
 }
 

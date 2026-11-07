@@ -455,11 +455,11 @@ function AssistantsGroup() {
           htmlFor="mcp-enabled"
           description={
             <>
-              Claude, Cursor, Codex and other MCP clients can search and read your transcripts, and pause recording. <span className="font-medium text-text">What they read is sent to their AI provider.</span>
+              Claude, Cursor, Codex and other MCP clients can search and read your transcripts, and pause recording. <span className="font-medium text-text">What they read is sent to their AI provider.</span> Turning this off also turns off Remote and audio.
             </>
           }
         >
-          <Switch id="mcp-enabled" label="Let AI assistants read your history" checked={mcp.enabled} onCheckedChange={(v) => (v ? setConfirm("enable") : void set({ enabled: false }))} />
+          <Switch id="mcp-enabled" label="Let AI assistants read your history" checked={mcp.enabled} onCheckedChange={(v) => (v ? setConfirm("enable") : void set({ enabled: false, includeRemote: false, allowAudio: false }))} />
         </Row>
         <Row label="Include the other side (Remote)" htmlFor="mcp-remote" description="Off: assistants see only what your microphone heard. Remote is other people's words.">
           <Switch id="mcp-remote" label="Include the other side (Remote)" disabled={!mcp.enabled} checked={mcp.includeRemote} onCheckedChange={(v) => (v ? setConfirm("remote") : void set({ includeRemote: false }))} />

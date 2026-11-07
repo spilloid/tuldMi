@@ -287,6 +287,17 @@ impl Store {
         Ok(event)
     }
 
+    /// The event only if it started at or after `from` and comes from one of `sources` (empty =
+    /// any). The filter is part of the query, so an excluded event is never loaded.
+    pub fn get_event_matching(&self, id: Uuid, from: Option<i64>, sources: &[Source]) -> Result<Option<SpeechEvent>> {
+        let clause = format!("WHERE e.id = ?1 AND (?2 IS NULL OR e.started_at >= ?2){}", source_clause(sources));
+        let mut connection = self.connection.lock();
+        let tx = connection.transaction()?;
+        let event = read::events(&tx, &self.data_dir, &clause, params![id.to_string(), from])?.pop();
+        tx.commit()?;
+        Ok(event)
+    }
+
     pub fn get_event(&self, id: Uuid) -> Result<Option<SpeechEvent>> {
         let mut connection = self.connection.lock();
         let tx = connection.transaction()?;
@@ -594,7 +605,13 @@ impl Store {
     /// including quotes, operators and punctuation, must not error. Empty/whitespace text with
     /// no other filter returns no hits. Ordered by relevance, ties by newest.
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
-        search::search(&self.connection.lock(), query)
+        search::search(&self.connection.lock(), query, search::Order::Relevance)
+    }
+
+    /// Like `search`, newest first and without relevance ranking (`rank` is 0), so excluded rows
+    /// can't influence the result (see `search::Order`).
+    pub fn search_by_time(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
+        search::search(&self.connection.lock(), query, search::Order::Newest)
     }
 
     // --- retention / deletion ---------------------------------------------------------------

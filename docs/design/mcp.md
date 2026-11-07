@@ -19,8 +19,9 @@ any MCP client that ability, read-only, over stdio.
 - **Crate `crates/mcp`** (`tuldmi-mcp`): a library (protocol, tools, ceiling) plus a thin `main`.
   It depends on `tuldmi-engine` with `default-features = false` (no whisper) and reads only
   through a new **`Store::open_read_only`**: `SQLITE_OPEN_READ_ONLY`, no migrations, refuses a
-  schema newer than it knows, and fails with "no history yet" when there is no database. The
-  app's writes (WAL) are visible to it at once.
+  schema other than its own, and fails with "no history yet" when there is no database (it never
+  creates one). The app's writes (WAL) are visible to it at once. Read-only still lets SQLite
+  create the WAL/SHM companion files, and an open read can delay a checkpoint; reads are short.
 - **stdio only.** Newline-delimited JSON-RPC 2.0 on stdin/stdout, so tuldMi still opens no
   network port and makes no network request. Protocol versions `2025-11-25`, `2025-06-18`,
   `2025-03-26` (batches), `2024-11-05`; initialize, then `notifications/initialized`, then tools.
@@ -37,7 +38,8 @@ words** (Remote). Therefore:
 
 1. **Off by default.** Until enabled, `tools/list` offers only `get_status`, which says how to
    turn access on. Enabling is a deliberate act in the app (Settings › Privacy & data › AI
-   assistants), behind a dialog that says what will leave the computer and where.
+   assistants), behind a dialog that says what will leave the computer and where. Turning
+   access off also turns Remote and audio off, so re-enabling starts from the dialog's promise.
 2. **Remote is a separate opt-in** (`includeRemote`, default **off**). With it off, the other
    side of every call does not exist as far as MCP is concerned: search, listings and counts
    leave it out. Turning it on asks the user to confirm they have the consent of the people
@@ -67,26 +69,33 @@ Old settings without the key load as these defaults (`#[serde(default)]`).
 
 | Tool | What it does | Class | Needs |
 |---|---|---|---|
-| `get_status` | Whether access is on, what it allows, event counts in scope, newest event time, whether tuldMi is running | read | always offered |
+| `get_status` | Whether access is on, what it allows, event count in scope and the newest event's time | read | always offered |
 | `search` | Full-text search of transcripts (`query`, optional `source` me/remote, `from`, `to`, `limit` ≤ 50) | read | enabled |
 | `recent` | Latest events, or those before a time (`before`, `source`, `limit` ≤ 100) | read | enabled |
 | `get_event` | One event: time, source, duration, status, language, every segment with its time | read | enabled |
 | `conversation_at` | The conversation around a time, grouped like the timeline (events less than 3 minutes apart) | read | enabled |
-| `get_audio` | One event's audio (Ogg Opus, ≤ 4 MiB) as MCP audio content | read | enabled + `allowAudio` |
+| `get_audio` | One event's audio (Ogg Opus, ≤ 4 MiB) as MCP audio content; not offered on protocol 2024-11-05, which has no audio content | read | enabled + `allowAudio` |
 | `pause_recording` | Pause capture now. Cannot resume, delete or change settings | write (reversible) | enabled |
 
 - Times: RFC 3339, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD`, or an age like `30m`, `2h`, `7d`; local
   times use this computer's time zone.
-- Every tool has annotations (`readOnlyHint`, `destructiveHint: false`, `openWorldHint: false`),
-  an `inputSchema`, and an `outputSchema` its `structuredContent` matches; text content mirrors it.
+- Every tool has annotations (`readOnlyHint`, `destructiveHint: false`, `openWorldHint: false`)
+  and an `inputSchema`; every tool except `get_audio` has an `outputSchema` its
+  `structuredContent` matches, and text content mirrors it.
+- `search` orders matches newest first, never by relevance: FTS5's bm25 uses statistics from
+  every transcript, so hidden Remote or out-of-window rows could reorder visible results. An id
+  lookup applies the ceiling in its SQL, so a hidden event is never loaded and answers exactly
+  like a missing one.
 - Out of scope: resuming, deleting, exporting, settings changes, resources, prompts,
   subscriptions, HTTP transport.
 
 ### Pausing from another process
 
-`pause_recording` runs the app executable with `--pause`. The single-instance plugin hands the
-arguments to the running app, which pauses (the same path as the tray, so the tray icon changes
-and the pause is visible). If tuldMi isn't running, the new process sees `--pause`, does nothing
+`pause_recording` runs the app executable with `--pause --pause-ack <uuid>`. The single-instance
+plugin hands the arguments to the running app, which pauses (the same path as the tray, so the
+tray icon changes and the pause is visible). The plugin's exit code only says the request was
+handed over, so the app writes the outcome (`paused`, `not-recording`, `not-set-up`, `starting`,
+`failed`) to `<data dir>/mcp/<uuid>`, and the tool reports that, never an unconfirmed pause. If tuldMi isn't running, the new process sees `--pause`, does nothing
 and exits at once **without starting the app**, and the tool answers "tuldMi isn't running, so
 nothing is being recorded". It never resumes: a running app that is already paused stays paused.
 
@@ -98,8 +107,10 @@ transcript text or audio.
 
 ## Packaging
 
-- `scripts/build-mcp.mjs` (run by `beforeBuildCommand` after the frontend build) builds
+- `scripts/build-mcp.mjs` (run by `scripts/release.ps1` and the macOS workflow) builds
   `tuldmi-mcp` for the bundle's target and copies it to `src-tauri/binaries/tuldmi-mcp-<triple>`.
+  `externalBin` lives in a bundle-only overlay, `src-tauri/tauri.bundle.conf.json`, passed with
+  `--config`, so ordinary `cargo build`/`tauri dev` don't need the sidecar.
 - Installed at `%LOCALAPPDATA%\tuldMi\tuldmi-mcp.exe` and
   `/Applications/tuldMi.app/Contents/MacOS/tuldmi-mcp`. Signed: Authenticode via the existing
   `signCommand` on Windows (verified after install), ad-hoc + hardened runtime on macOS

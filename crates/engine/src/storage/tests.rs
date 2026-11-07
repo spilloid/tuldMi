@@ -430,6 +430,13 @@ fn read_only_store_reads_filters_and_never_writes() -> Result<()> {
     // Search works read-only (its tokenizer lives in TEMP tables) and honours the source filter.
     let hits = reader.search(&SearchQuery { text: "deck".into(), sources: vec![Source::Mic], from: None, to: None, limit: None })?;
     assert_eq!(hits.iter().map(|h| h.event_id).collect::<Vec<_>>(), vec![me.id]);
+    // Newest-first search, and an id lookup that respects the filter.
+    let by_time = reader.search_by_time(&SearchQuery { text: "deck".into(), sources: vec![], from: None, to: None, limit: None })?;
+    assert_eq!(by_time.iter().map(|h| h.event_id).collect::<Vec<_>>(), vec![remote.id, me.id]);
+    assert!(by_time.iter().all(|h| h.rank == 0.0));
+    assert!(reader.get_event_matching(remote.id, None, &[Source::Mic])?.is_none());
+    assert!(reader.get_event_matching(me.id, Some(1_001), &[])?.is_none());
+    assert_eq!(reader.get_event_matching(me.id, Some(1_000), &[Source::Mic])?.map(|e| e.id), Some(me.id));
     // The app's later writes are visible.
     insert(&store, &session, 3_000, None)?;
     assert_eq!(reader.event_summary(None, &[])?.0, 3);
@@ -463,5 +470,29 @@ fn settings_without_mcp_load_with_access_off() -> Result<()> {
     assert!(settings.onboarding_complete);
     assert_eq!(settings.mcp, McpSettings::default());
     assert!(!settings.mcp.enabled && !settings.mcp.include_remote && !settings.mcp.allow_audio);
+    Ok(())
+}
+
+#[test]
+fn time_ordered_search_ignores_excluded_transcripts() -> Result<()> {
+    // bm25 ranks with statistics from every row, so hidden rows can reorder visible ones
+    // (MCP review). Ordered by time, the visible result is the same whatever is hidden.
+    let visible = |hidden: &str| -> Result<Vec<i64>> {
+        let (_directory, store) = setup()?;
+        let session = store.start_session(0)?;
+        let a = insert(&store, &session, 1_000, None)?;
+        let b = insert(&store, &session, 2_000, None)?;
+        store.save_transcript(a.id, &[NewSegment { start_ms: 0, end_ms: 1, text: "alpha alpha beta".into(), confidence: None }], None, "m")?;
+        store.save_transcript(b.id, &[NewSegment { start_ms: 0, end_ms: 1, text: "alpha beta beta".into(), confidence: None }], None, "m")?;
+        for at in [3_000, 4_000, 5_000] {
+            let event = store.insert_event(&NewEvent { session_id: session.id, source: Source::System, started_at: at, ended_at: at + 1, audio: None })?;
+            store.save_transcript(event.id, &[NewSegment { start_ms: 0, end_ms: 1, text: hidden.into(), confidence: None }], None, "m")?;
+        }
+        let query = SearchQuery { text: "alpha beta".into(), sources: vec![Source::Mic], from: None, to: None, limit: Some(1) };
+        // Compare by time: ids differ between the two databases.
+        Ok(store.search_by_time(&query)?.into_iter().map(|h| h.at).collect())
+    };
+    assert_eq!(visible("alpha alpha alpha alpha beta")?, vec![2_000], "the newest visible match");
+    assert_eq!(visible("alpha alpha alpha alpha beta")?, visible("beta beta beta beta alpha")?);
     Ok(())
 }
