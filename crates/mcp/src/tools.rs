@@ -462,7 +462,11 @@ fn conversation_at(store: &Store, ceiling: &Ceiling, args: &Value, now: chrono::
     let Some(group) = found else {
         return ok(format!("No conversation within 3 minutes of {}.", time_text(at)), json!({ "conversation": null, "truncated": false }), 0);
     };
-    let cut_short = group.iter().any(|e| Some(e.id) == earliest_read || Some(e.id) == latest_read);
+    // Cut short by the row limits, or reaching the edge of the window read (it may go on).
+    let window_start = ceiling.clamp_from(Some(at - CONVERSATION_REACH_MS)).unwrap_or(at - CONVERSATION_REACH_MS);
+    let at_edge = group.first().is_some_and(|e| e.started_at - CONVERSATION_GAP_MS < window_start)
+        || group.iter().map(|e| e.ended_at).max().is_some_and(|end| end + CONVERSATION_GAP_MS > at + CONVERSATION_REACH_MS);
+    let cut_short = at_edge || group.iter().any(|e| Some(e.id) == earliest_read || Some(e.id) == latest_read);
     let truncated = cut_short || group.len() > MAX_CONVERSATION_EVENTS;
     let shown = &group[..group.len().min(MAX_CONVERSATION_EVENTS)];
     let started = shown.first().map(|e| e.started_at).unwrap_or(at);
@@ -568,6 +572,15 @@ fn get_status(snapshot: &Snapshot) -> ToolResult {
 
 fn pause(server: &McpServer) -> ToolResult {
     let app = server.app_exe.as_ref().ok_or("tuldMi's app wasn't found next to tuldmi-mcp, so it can't be paused from here.")?;
+    // The app acknowledges in its own data folder; with --data-dir elsewhere the answer could
+    // never arrive, and the app being paused isn't the history being read.
+    let same = |a: &std::path::Path, b: &std::path::Path| match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    if !crate::default_data_dir().is_some_and(|own| same(&own, &server.data_dir)) {
+        return Err("Pausing is only available when reading tuldMi's own history.".into());
+    }
     let token = Uuid::new_v4();
     let ack = server.data_dir.join("mcp").join(token.to_string());
     let mut child = std::process::Command::new(app)

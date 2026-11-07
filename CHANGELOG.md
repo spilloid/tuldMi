@@ -2,6 +2,20 @@
 
 All notable changes to tuldMi are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **AI assistants (MCP), off by default.** `tuldmi-mcp`, installed with tuldMi, lets Claude Code,
+  Claude Desktop, Cursor, Codex or any MCP client search and read your transcripts over stdio
+  (`search`, `recent`, `conversation_at`, `get_event`, `get_audio`, `get_status`,
+  `pause_recording`). Turn it on in Settings › Privacy & data › AI assistants, which says what
+  leaves the computer: assistants send what they read to their AI provider. Then it reads your
+  own side (Me) from the last 30 days; the other side of calls (Remote) and audio are separate
+  opt-ins. It can pause recording, never resume it, delete or change anything. Read-only, opens
+  no network port, and logs no transcript text. Setup: docs/mcp.md.
+- `tuldmi --pause` pauses a running tuldMi (and starts nothing if none is running).
+
 ## [0.2.0] — 2026-11-07
 
 ### Added

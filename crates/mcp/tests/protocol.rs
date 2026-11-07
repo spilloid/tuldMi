@@ -295,3 +295,24 @@ fn a_busy_history_cannot_crowd_out_the_conversation_asked_for() {
     assert_eq!(long["structuredContent"]["truncated"], true);
     c.finish();
 }
+
+#[test]
+fn a_conversation_longer_than_the_window_says_it_may_go_on() {
+    // The review's case: one-second events two minutes apart for seven hours.
+    let h = history();
+    set(h.dir.path(), on(true, false));
+    let store = Store::open(h.dir.path()).unwrap();
+    let session = store.start_session(0).unwrap();
+    let first = now() - 20 * 3_600_000;
+    for i in 0..211 {
+        let at = first + i * 120_000;
+        store.insert_event(&NewEvent { session_id: session.id, source: Source::Mic, started_at: at, ended_at: at + 1_000, audio: None }).unwrap();
+    }
+    drop(store);
+    let mut c = Client::ready(h.dir.path());
+    let at = chrono::DateTime::from_timestamp_millis(first).unwrap().to_rfc3339();
+    let conversation = c.call("conversation_at", json!({ "time": at }));
+    assert!(conversation["structuredContent"]["conversation"]["events"].as_array().unwrap().len() < 211);
+    assert_eq!(conversation["structuredContent"]["truncated"], true);
+    c.finish();
+}

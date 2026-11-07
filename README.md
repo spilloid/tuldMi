@@ -35,6 +35,10 @@ playable timeline of what was said. Nothing leaves your device.
 - **Tray-first**: recording state always visible, pause/resume from the tray or a global
   shortcut (default **Ctrl+Shift+`**, **⌥⌘`** on a Mac), closing the window keeps listening (and tells you so).
 - **Export** to Markdown or JSON. Delete one event, its audio, or everything.
+- **AI assistants (MCP), off by default**: `tuldmi-mcp` lets Claude, Cursor, Codex and other MCP
+  clients search and read your transcripts over stdio, read-only. Your side only and the last 30
+  days unless you widen it; the other side of calls and audio are separate opt-ins. See
+  [docs/mcp.md](docs/mcp.md).
 
 ## Privacy
 

@@ -529,7 +529,8 @@ function AssistantsGroup() {
           <Button
             variant="primary"
             onClick={async () => {
-              if (await set({ enabled: true })) setConfirm(null);
+              // Always start from what the dialog promises: your side only, no audio.
+              if (await set({ enabled: true, includeRemote: false, allowAudio: false })) setConfirm(null);
             }}
           >
             Turn on

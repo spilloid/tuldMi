@@ -16,7 +16,7 @@ exactly what happens to your audio, in plain terms, and what tuldMi does **not**
 
 ## Where it goes
 
-Nowhere. Everything stays on your computer:
+Nowhere, unless you turn on AI assistant access (below). Everything stays on your computer:
 
 Paths below are for Windows; on macOS the folder is
 `~/Library/Application Support/com.spillerstech.tuldmi/`.
@@ -35,6 +35,16 @@ Settings → Privacy & data → *Open data folder* takes you there.
 - **The only network request tuldMi makes** is downloading a transcription model, and only when
   you click *Download*. It goes to Hugging Face (huggingface.co), shows the size first, and the
   file is verified with SHA-256.
+- **AI assistants (MCP), off by default.** If you turn on Settings → Privacy & data → *AI
+  assistants*, an assistant you connect (Claude, Cursor, Codex, …) can read your transcripts
+  through `tuldmi-mcp`, and **it sends what it reads to its AI provider**. tuldMi itself still
+  makes no network request; the assistant does. By default it reads only your side (Me) from the
+  last 30 days; the other side of calls (Remote) and audio are separate opt-ins, and Remote is
+  other people's words, so include it only with their agreement. Turning access off takes effect
+  on the assistant's next request, and also turns Remote and audio off. `tuldmi-mcp` logs which
+  tool ran and how many results, never what was asked or said. An assistant that can read files
+  on your computer can open the data folder directly whatever this setting says, because the
+  history isn't encrypted yet. Details: [mcp.md](mcp.md).
 
 ## How long it stays
 
