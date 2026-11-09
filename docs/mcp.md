@@ -68,7 +68,8 @@ times use this computer's time zone. `me` is your microphone; `remote` is everyt
 played (the other side of calls), not told apart by speaker. Transcripts are machine-made and can
 contain mistakes.
 
-If tuldMi isn't running, `pause_recording` says so and starts nothing.
+If tuldMi isn't running, `pause_recording` says so; the launched copy exits at once without recording
+or showing anything.
 
 ## What is logged
 

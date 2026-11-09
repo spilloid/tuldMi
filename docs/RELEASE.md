@@ -42,7 +42,8 @@ Profile Signer** on the profile, the Windows SDK SignTool (10.0.22621+), and
 `target\release\tuldmi.exe` always reads NotSigned after a build (Tauri restores its unpatched
 output); the signed exe is the one inside the installer. Verify by installing
 (`setup.exe /S`) and running `Get-AuthenticodeSignature` on the installed
-`%LOCALAPPDATA%\tuldMi\tuldmi.exe`. Never describe a build as signed until the published asset
+`%LOCALAPPDATA%	uldMi	uldmi.exe` **and** `%LOCALAPPDATA%	uldMi	uldmi-mcp.exe` (the MCP server
+assistants launch; Smart App Control blocks it unsigned). Never describe a build as signed until the published asset
 verifies `Valid` with a timestamp. CI signing (an app-registration identity, as SpoolSmith does)
 is a v0.1.x item.
 

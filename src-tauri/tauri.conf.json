@@ -40,7 +40,7 @@
     "copyright": "Copyright (c) 2026 Joseph Spillers. MIT License.",
     "category": "Productivity",
     "shortDescription": "Your conversations, remembered.",
-    "longDescription": "tuldMi is a local-first audio memory: it listens to the microphone and system audio you allow, keeps only speech, transcribes it on your device, and gives you a searchable, playable timeline. Nothing leaves your computer.",
+    "longDescription": "tuldMi is a local-first audio memory: it listens to the microphone and system audio you allow, keeps only speech, transcribes it on your device, and gives you a searchable, playable timeline. Nothing leaves your computer unless you connect an AI assistant.",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "resources": {
       "resources/ggml-silero-v6.2.0.bin": "ggml-silero-v6.2.0.bin"
