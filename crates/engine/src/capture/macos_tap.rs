@@ -608,7 +608,7 @@ fn watch(rates: Rates, ctx: Arc<Ctx>, stopped: crossbeam_channel::Receiver<()>) 
 mod tests {
     use super::{CaptureMsg, Source, changed, interleave, relay};
     use std::sync::{Arc, atomic::AtomicU64, atomic::Ordering};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     fn audio() -> CaptureMsg {
         CaptureMsg::Audio { source: Source::System, data: vec![0.0], at: Instant::now() }
@@ -635,9 +635,15 @@ mod tests {
         Relay { callback, engine, stop: Some(stop), handle, dropped }
     }
 
-    /// Waits until the relay has taken everything from the private channel.
+    /// Bounds every wait, so a regression fails instead of hanging.
+    const WAIT: Duration = Duration::from_secs(5);
+
+    /// Waits until the relay has dequeued everything from the private channel (not necessarily
+    /// forwarded it).
     fn drained(r: &Relay) {
+        let deadline = Instant::now() + WAIT;
         while !r.callback.is_empty() {
+            assert!(Instant::now() < deadline, "relay stopped draining");
             std::thread::yield_now();
         }
     }
@@ -646,7 +652,7 @@ mod tests {
     fn nothing_reaches_the_engine_after_stop() {
         let mut r = start(16);
         r.callback.send(audio()).unwrap();
-        assert!(matches!(r.engine.recv().unwrap(), CaptureMsg::Audio { .. }));
+        assert!(matches!(r.engine.recv_timeout(WAIT).unwrap(), CaptureMsg::Audio { .. }));
         // `stop`: signal and join the relay.
         r.stop.take().unwrap().send(()).unwrap();
         r.handle.join().unwrap();
@@ -663,7 +669,9 @@ mod tests {
         r.callback.send(audio()).unwrap();
         r.callback.send(audio()).unwrap();
         drained(&r);
+        let deadline = Instant::now() + WAIT;
         while r.dropped.load(Ordering::Relaxed) == 0 {
+            assert!(Instant::now() < deadline, "drop never counted");
             std::thread::yield_now();
         }
         assert_eq!(r.engine.len(), 1);
@@ -676,8 +684,8 @@ mod tests {
         r.callback.send(failed()).unwrap();
         drained(&r);
         // The relay holds `Failed` while the engine queue is full.
-        assert!(matches!(r.engine.recv().unwrap(), CaptureMsg::Audio { .. }));
-        assert!(matches!(r.engine.recv().unwrap(), CaptureMsg::Failed { .. }));
+        assert!(matches!(r.engine.recv_timeout(WAIT).unwrap(), CaptureMsg::Audio { .. }));
+        assert!(matches!(r.engine.recv_timeout(WAIT).unwrap(), CaptureMsg::Failed { .. }));
         // Then it exits: audio a callback was still copying is not passed on after `Failed`.
         r.handle.join().unwrap();
         assert!(r.callback.send(audio()).is_err());
