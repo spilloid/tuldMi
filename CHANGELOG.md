@@ -14,7 +14,8 @@ All notable changes to tuldMi are documented here. Format: [Keep a Changelog](ht
   own side (Me) from the last 30 days; the other side of calls (Remote) and audio are separate
   opt-ins. It can pause recording, never resume it, delete or change anything. Read-only, opens
   no network port, and logs no transcript text. Setup: docs/mcp.md.
-- `tuldmi --pause` pauses a running tuldMi (and starts nothing if none is running).
+- `tuldmi --pause` pauses a running tuldMi. If none is running it exits at once without recording
+  or showing anything.
 
 ## [0.2.0] — 2026-11-07
 

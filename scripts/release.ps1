@@ -47,6 +47,13 @@ try {
         Write-Host ("{0}: {1} | {2} | timestamp: {3}" -f (Split-Path $f -Leaf), $sig.Status, $sig.SignerCertificate.Subject, [bool]$sig.TimeStamperCertificate)
         if ($Sign -and ($sig.Status -ne 'Valid' -or -not $sig.TimeStamperCertificate)) { throw "$f is not validly signed and timestamped" }
     }
+    # The MCP sidecar is signed in place before NSIS packs it; check that copy too.
+    $sidecar = Join-Path $repo 'src-tauri\binaries\tuldmi-mcp-x86_64-pc-windows-msvc.exe'
+    if ($Sign) {
+        $sig = Get-AuthenticodeSignature $sidecar
+        Write-Host ("tuldmi-mcp.exe: {0} | timestamp: {1}" -f $sig.Status, [bool]$sig.TimeStamperCertificate)
+        if ($sig.Status -ne 'Valid' -or -not $sig.TimeStamperCertificate) { throw "tuldmi-mcp.exe was not signed (verify the installed copy too)" }
+    }
     $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
     [IO.File]::WriteAllText("$installer.sha256", "$hash  $(Split-Path $installer -Leaf)`n", (New-Object System.Text.UTF8Encoding $false))
     Write-Host "SHA-256 $hash"

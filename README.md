@@ -4,7 +4,8 @@
 
 tuldMi sits quietly in your system tray, listens to the microphone and system audio you allow,
 keeps only the speech, transcribes it on your computer, and gives you a calm, searchable,
-playable timeline of what was said. Nothing leaves your device.
+playable timeline of what was said. Nothing leaves your device unless you connect an AI assistant
+(off by default).
 
 ![tuldMi timeline](docs/screenshots/timeline-dark.png)
 

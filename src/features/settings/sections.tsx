@@ -515,7 +515,7 @@ function AssistantsGroup() {
           </li>
           <li className="flex gap-2">
             <Check size={14} className="mt-0.5 shrink-0 text-success" aria-hidden />
-            <span>Only your side (Me) and the last {mcp.maxAgeDays || "∞"} days until you change that here. Audio stays private unless you share it.</span>
+            <span>Only your side (Me) and {mcp.maxAgeDays ? `the last ${mcp.maxAgeDays} days` : "all of your history"} until you change that here. Audio stays private unless you share it.</span>
           </li>
           <li className="flex gap-2">
             <Check size={14} className="mt-0.5 shrink-0 text-success" aria-hidden />

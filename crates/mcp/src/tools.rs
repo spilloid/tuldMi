@@ -101,7 +101,7 @@ const DEFS: &[Def] = &[
     Def {
         name: "search",
         title: "Search transcripts",
-        description: "Find what was said: full-text search of transcripts, newest and best matches first. Matches are marked **like this**.",
+        description: "Find what was said: full-text search of transcripts, newest first. Matches are marked **like this**.",
         params: &[
             p("query", Kind::Str, true, "Words to find"),
             p("source", Kind::Str, false, SOURCE),
