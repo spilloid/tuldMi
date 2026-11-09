@@ -6,3 +6,5 @@ dist/
 .DS_Store
 /src-tauri/gen/
 /scratch/
+# tuldmi-mcp sidecar, built by scripts/build-mcp.mjs
+src-tauri/binaries/

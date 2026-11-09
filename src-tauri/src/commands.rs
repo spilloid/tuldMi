@@ -145,6 +145,14 @@ pub async fn open_data_dir(app: AppHandle, state: State<'_, AppState>) -> Res<()
     app.opener().open_path(state.data_dir.to_string_lossy(), None::<&str>).map_err(err)
 }
 
+/// The `tuldmi-mcp` executable installed next to the app (Tauri `externalBin`), if any.
+#[tauri::command]
+pub async fn mcp_server_path() -> Res<Option<String>> {
+    let exe = std::env::current_exe().map_err(err)?;
+    let server = exe.parent().map(|dir| dir.join(format!("tuldmi-mcp{}", std::env::consts::EXE_SUFFIX)));
+    Ok(server.filter(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned()))
+}
+
 #[tauri::command]
 pub async fn export_transcripts(app: AppHandle, state: State<'_, AppState>, format: String, from: Option<i64>, to: Option<i64>) -> Res<String> {
     let format = match format.as_str() {

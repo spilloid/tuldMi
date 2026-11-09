@@ -1,7 +1,7 @@
-import { Check, FileJson, FileText, FolderOpen, Lock, RotateCcw, Trash2 } from "lucide-react";
+import { Bot, Check, Copy, FileJson, FileText, FolderOpen, Lock, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { DeviceInfo, Retention, Settings, StorageStats, Theme, VadSettings } from "../../lib/ipc/types";
-import { DEFAULT_VAD } from "../../lib/ipc/types";
+import type { DeviceInfo, McpSettings, Retention, Settings, StorageStats, Theme, VadSettings } from "../../lib/ipc/types";
+import { DEFAULT_MCP, DEFAULT_VAD } from "../../lib/ipc/types";
 import { errorMessage } from "../../lib/ipc/backend";
 import { formatBytes, isMac, trayWord } from "../../lib/platform";
 import { DAY, startOfDay } from "../../lib/time";
@@ -363,6 +363,8 @@ export function PrivacySection() {
         </Row>
       </Group>
 
+      <AssistantsGroup />
+
       <Group title="Danger zone">
         <Row label="Delete all history" description="Every transcript and recording, permanently. Settings and downloaded models are kept.">
           <Button size="sm" variant="secondary" className="!text-danger" icon={<Trash2 size={13} />} onClick={() => setConfirmOpen(true)}>
@@ -391,6 +393,172 @@ export function PrivacySection() {
           }
         }}
       />
+    </>
+  );
+}
+
+// ---- AI assistants (MCP) ------------------------------------------------------------------------
+
+const MCP_AGES = [
+  { value: "7", label: "Last 7 days" },
+  { value: "30", label: "Last 30 days" },
+  { value: "90", label: "Last 90 days" },
+  { value: "0", label: "All history" },
+];
+
+function useMcpServerPath() {
+  const backend = useBackend();
+  const [path, setPath] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    backend.mcpServerPath().then((p) => alive && setPath(p), () => alive && setPath(null));
+    return () => {
+      alive = false;
+    };
+  }, [backend]);
+  return path;
+}
+
+/** A shell argument, quoted when it needs it. */
+function quoted(path: string) {
+  return /[\s"'$`&()]/.test(path) ? `"${path.replace(/"/g, '\\"')}"` : path;
+}
+
+function AssistantsGroup() {
+  const { settings } = useSettings();
+  const save = usePatch();
+  const toast = useToast();
+  const path = useMcpServerPath();
+  const [confirm, setConfirm] = useState<"enable" | "remote" | null>(null);
+  if (!settings) return null;
+  const mcp: McpSettings = { ...DEFAULT_MCP, ...settings.mcp };
+  const set = (p: Partial<McpSettings>) => save({ mcp: { ...mcp, ...p } });
+  const command = path ? `claude mcp add tuldmi -- ${quoted(path)}` : null;
+  const copy = async () => {
+    if (!command) return;
+    try {
+      await navigator.clipboard.writeText(command);
+      toast.show({ level: "success", message: "Command copied." });
+    } catch {
+      toast.show({ level: "error", message: "Couldn't copy. Select the command and copy it instead." });
+    }
+  };
+
+  return (
+    <>
+      <Group
+        title="AI assistants (MCP)"
+        footer="Assistants that can also read files or run commands on this computer (most coding assistants can) can open the data folder directly, whatever these settings say."
+      >
+        <Row
+          label="Let AI assistants read your history"
+          htmlFor="mcp-enabled"
+          description={
+            <>
+              Claude, Cursor, Codex and other MCP clients can search and read your transcripts, and pause recording. <span className="font-medium text-text">What they read is sent to their AI provider.</span> Turning this off also turns off Remote and audio.
+            </>
+          }
+        >
+          <Switch id="mcp-enabled" label="Let AI assistants read your history" checked={mcp.enabled} onCheckedChange={(v) => (v ? setConfirm("enable") : void set({ enabled: false, includeRemote: false, allowAudio: false }))} />
+        </Row>
+        <Row label="Include the other side (Remote)" htmlFor="mcp-remote" description="Off: assistants see only what your microphone heard. Remote is other people's words.">
+          <Switch id="mcp-remote" label="Include the other side (Remote)" disabled={!mcp.enabled} checked={mcp.includeRemote} onCheckedChange={(v) => (v ? setConfirm("remote") : void set({ includeRemote: false }))} />
+        </Row>
+        <Row label="Share audio" htmlFor="mcp-audio" description="Off: transcripts only. On: an assistant can also fetch the recording of an event you kept.">
+          <Switch id="mcp-audio" label="Share audio" disabled={!mcp.enabled} checked={mcp.allowAudio} onCheckedChange={(v) => void set({ allowAudio: v })} />
+        </Row>
+        <Row label="How far back" description="Nothing older is shared.">
+          <Select label="How far back" value={String(mcp.maxAgeDays)} onChange={(v) => void set({ maxAgeDays: Number(v) })} options={MCP_AGES} className="w-[150px]" />
+        </Row>
+        <Row
+          label="Connect an assistant"
+          align="start"
+          description={
+            command ? (
+              <>
+                <span className="mt-1.5 block select-all break-all rounded-md bg-sunken px-2.5 py-1.5 font-mono text-[12px] text-text">{command}</span>
+                <span className="mt-1.5 block">
+                  For Claude Code. Other clients run the same program; see the{" "}
+                  <a className="font-medium text-accent-text hover:underline" href="https://spilloid.github.io/tuldMi/mcp.html" target="_blank" rel="noreferrer">
+                    setup guide
+                  </a>
+                  .
+                </span>
+              </>
+            ) : path === null ? (
+              "This build doesn't include tuldmi-mcp (it ships with the installer and the Mac app)."
+            ) : (
+              "Looking for tuldmi-mcp…"
+            )
+          }
+        >
+          {command && (
+            <Button size="sm" variant="secondary" icon={<Copy size={13} />} onClick={() => void copy()}>
+              Copy
+            </Button>
+          )}
+        </Row>
+      </Group>
+
+      <Dialog
+        open={confirm === "enable"}
+        onOpenChange={(v) => !v && setConfirm(null)}
+        title="Let AI assistants read your history?"
+        description="An assistant you connect can search and read your transcripts and pause recording. It can't resume recording, delete anything or change settings."
+      >
+        <ul className="mt-3 space-y-1.5 text-sm text-muted">
+          <li className="flex gap-2">
+            <Bot size={14} className="mt-0.5 shrink-0 text-accent-text" aria-hidden />
+            <span>
+              <span className="font-medium text-text">What it reads leaves this computer:</span> assistants send it to their AI provider (Anthropic, OpenAI, …) to answer you.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <Check size={14} className="mt-0.5 shrink-0 text-success" aria-hidden />
+            <span>Only your side (Me) and the last {mcp.maxAgeDays || "∞"} days until you change that here. Audio stays private unless you share it.</span>
+          </li>
+          <li className="flex gap-2">
+            <Check size={14} className="mt-0.5 shrink-0 text-success" aria-hidden />
+            <span>Turning this off stops access on the assistant's next request.</span>
+          </li>
+        </ul>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setConfirm(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={async () => {
+              // Always start from what the dialog promises: your side only, no audio.
+              if (await set({ enabled: true, includeRemote: false, allowAudio: false })) setConfirm(null);
+            }}
+          >
+            Turn on
+          </Button>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={confirm === "remote"}
+        onOpenChange={(v) => !v && setConfirm(null)}
+        title="Share the other side of your calls?"
+        description="Remote is everything your computer played: usually other people talking. Their words would go to your assistant's AI provider too."
+      >
+        <p className="mt-3 text-sm text-muted">Only do this if the people you record have agreed to it, the same responsibility as recording them.</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setConfirm(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={async () => {
+              if (await set({ includeRemote: true })) setConfirm(null);
+            }}
+          >
+            Include Remote
+          </Button>
+        </div>
+      </Dialog>
     </>
   );
 }

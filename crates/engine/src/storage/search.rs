@@ -46,7 +46,16 @@ fn match_text(connection: &Connection, text: &str) -> Result<String> {
     Ok(tokens.join(" "))
 }
 
-pub(super) fn search(connection: &Connection, query: &SearchQuery) -> Result<Vec<SearchHit>> {
+/// How hits are ordered. `Relevance` ranks with FTS5's bm25, whose statistics span every
+/// transcript, so a caller that hides some rows (the MCP ceiling) must use `Newest`: then which
+/// rows come back, and in what order, depends only on the rows the filters admit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Order {
+    Relevance,
+    Newest,
+}
+
+pub(super) fn search(connection: &Connection, query: &SearchQuery, order: Order) -> Result<Vec<SearchHit>> {
     let text = match_text(connection, &query.text)?;
     let has_text = !text.is_empty();
     if !has_text && query.sources.is_empty() && query.from.is_none() && query.to.is_none() {
@@ -57,7 +66,16 @@ pub(super) fn search(connection: &Connection, query: &SearchQuery) -> Result<Vec
     let system = all_sources || query.sources.contains(&Source::System);
     let limit = query.limit.unwrap_or(DEFAULT_SEARCH_LIMIT).min(200);
     // Empty text with filters lists matching segments, with an unhighlighted text snippet.
-    let sql = if has_text {
+    let sql = if has_text && order == Order::Newest {
+        "SELECT e.id, s.id, e.source, e.started_at, s.start_ms,
+         snippet(transcript_fts, 0, ?1, ?2, '...', 16), 0.0
+         FROM transcript_fts JOIN transcript_segments s ON s.seq = transcript_fts.rowid
+         JOIN audio_events e ON e.id = s.event_id
+         WHERE transcript_fts MATCH ?3 AND (?4 OR e.source != 'mic')
+         AND (?5 OR e.source != 'system') AND (?6 IS NULL OR e.started_at >= ?6)
+         AND (?7 IS NULL OR e.started_at <= ?7)
+         ORDER BY e.started_at DESC, e.id DESC, s.start_ms LIMIT ?8"
+    } else if has_text {
         "SELECT e.id, s.id, e.source, e.started_at, s.start_ms,
          snippet(transcript_fts, 0, ?1, ?2, '...', 16), bm25(transcript_fts)
          FROM transcript_fts JOIN transcript_segments s ON s.seq = transcript_fts.rowid

@@ -1,0 +1,24 @@
+[package]
+name = "tuldmi-mcp"
+description = "tuldMi's Model Context Protocol server (stdio): transcripts for AI assistants, read-only and bounded"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "tuldmi-mcp"
+path = "src/main.rs"
+
+# Reads through tuldmi-engine's read-only Store; no transcription backend.
+[dependencies]
+tuldmi-engine = { workspace = true, default-features = false }
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+base64 = "0.22"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+
+[dev-dependencies]
+tempfile = "3"

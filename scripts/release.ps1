@@ -17,7 +17,10 @@ try {
     npm ci --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
 
-    $tauriArgs = @('tauri', 'build')
+    # The MCP server ships beside the app (Tauri externalBin, docs/design/mcp.md).
+    node scripts/build-mcp.mjs
+    if ($LASTEXITCODE -ne 0) { throw 'tuldmi-mcp build failed' }
+    $tauriArgs = @('tauri', 'build', '--config', 'src-tauri/tauri.bundle.conf.json')
     if ($Sign) {
         # Tauri runs signCommand for the app executable (before it is packed into the
         # installer), the uninstaller, and the installer itself. %1 is the file to sign.

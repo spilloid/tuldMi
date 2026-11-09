@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use parking_lot::Mutex;
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::types::*;
@@ -83,6 +83,28 @@ pub struct Store {
     connection: Mutex<Connection>,
 }
 
+/// Which events `Store::events_matching` returns.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventFilter {
+    /// Events that started at or after this (epoch ms).
+    pub from: Option<i64>,
+    /// Events that started before this (epoch ms).
+    pub to: Option<i64>,
+    /// Empty = every source.
+    pub sources: Vec<Source>,
+    pub newest_first: bool,
+    pub limit: u32,
+}
+
+fn source_clause(sources: &[Source]) -> String {
+    // Built from the enum's own constants, never from input.
+    if sources.is_empty() {
+        return String::new();
+    }
+    let list: Vec<String> = sources.iter().map(|s| format!("'{}'", s.as_str())).collect();
+    format!(" AND e.source IN ({})", list.join(", "))
+}
+
 fn now_ms() -> i64 {
     crate::clock::WallAnchor::now().unix_ms
 }
@@ -129,6 +151,36 @@ impl Store {
             )?;
         }
         tx.commit()?;
+        search::init_tokenizer(&connection)?;
+        Ok(Store {
+            data_dir,
+            connection: Mutex::new(connection),
+        })
+    }
+
+    /// A read-only view of an existing history, for another process (`tuldmi-mcp`) while the
+    /// app may be running. Never migrates or writes the database: a schema newer or older than
+    /// this engine is refused, and a missing database is an error rather than created.
+    pub fn open_read_only(data_dir: &Path) -> Result<Store> {
+        let data_dir = std::path::absolute(data_dir)?;
+        let path = data_dir.join("tuldmi.db");
+        if !path.is_file() {
+            return Err(Error::Other("no tuldMi history on this computer yet".into()));
+        }
+        let connection = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        connection.busy_timeout(std::time::Duration::from_millis(5_000))?;
+        connection.pragma_update(None, "temp_store", "MEMORY")?;
+        let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version > LATEST_SCHEMA {
+            return Err(Error::Other("the history was written by a newer tuldMi".into()));
+        }
+        if version < LATEST_SCHEMA {
+            return Err(Error::Other("open tuldMi once to update its history first".into()));
+        }
+        // Search tokenizes queries in TEMP tables, which a read-only database still allows.
         search::init_tokenizer(&connection)?;
         Ok(Store {
             data_dir,
@@ -235,6 +287,17 @@ impl Store {
         Ok(event)
     }
 
+    /// The event only if it started at or after `from` and comes from one of `sources` (empty =
+    /// any). The filter is part of the query, so an excluded event is never loaded.
+    pub fn get_event_matching(&self, id: Uuid, from: Option<i64>, sources: &[Source]) -> Result<Option<SpeechEvent>> {
+        let clause = format!("WHERE e.id = ?1 AND (?2 IS NULL OR e.started_at >= ?2){}", source_clause(sources));
+        let mut connection = self.connection.lock();
+        let tx = connection.transaction()?;
+        let event = read::events(&tx, &self.data_dir, &clause, params![id.to_string(), from])?.pop();
+        tx.commit()?;
+        Ok(event)
+    }
+
     pub fn get_event(&self, id: Uuid) -> Result<Option<SpeechEvent>> {
         let mut connection = self.connection.lock();
         let tx = connection.transaction()?;
@@ -259,6 +322,33 @@ impl Store {
 
     /// Newest first, keyset-paginated on `(started_at, id)`: returns events strictly older than
     /// `cursor` in that order, so events sharing a start time are never skipped between pages.
+    /// Events in a time range from the given sources, with their transcripts.
+    pub fn events_matching(&self, filter: &EventFilter) -> Result<Vec<SpeechEvent>> {
+        let order = if filter.newest_first { "DESC" } else { "ASC" };
+        let clause = format!(
+            "WHERE (?1 IS NULL OR e.started_at >= ?1) AND (?2 IS NULL OR e.started_at < ?2){} \
+             ORDER BY e.started_at {order}, e.id {order} LIMIT ?3",
+            source_clause(&filter.sources)
+        );
+        let mut connection = self.connection.lock();
+        let tx = connection.transaction()?;
+        let events = read::events(&tx, &self.data_dir, &clause, params![filter.from, filter.to, filter.limit])?;
+        tx.commit()?;
+        Ok(events)
+    }
+
+    /// How many events started at or after `from` from the given sources (empty = all), and the
+    /// newest one's start.
+    pub fn event_summary(&self, from: Option<i64>, sources: &[Source]) -> Result<(u64, Option<i64>)> {
+        let sql = format!(
+            "SELECT COUNT(*), MAX(e.started_at) FROM audio_events e WHERE (?1 IS NULL OR e.started_at >= ?1){}",
+            source_clause(sources)
+        );
+        Ok(self.connection.lock().query_row(&sql, params![from], |row| {
+            Ok((read::unsigned(row, 0)?, row.get(1)?))
+        })?)
+    }
+
     pub fn list_events_page(
         &self,
         cursor: Option<(i64, Uuid)>,
@@ -515,7 +605,13 @@ impl Store {
     /// including quotes, operators and punctuation, must not error. Empty/whitespace text with
     /// no other filter returns no hits. Ordered by relevance, ties by newest.
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
-        search::search(&self.connection.lock(), query)
+        search::search(&self.connection.lock(), query, search::Order::Relevance)
+    }
+
+    /// Like `search`, newest first and without relevance ranking (`rank` is 0), so excluded rows
+    /// can't influence the result (see `search::Order`).
+    pub fn search_by_time(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
+        search::search(&self.connection.lock(), query, search::Order::Newest)
     }
 
     // --- retention / deletion ---------------------------------------------------------------
