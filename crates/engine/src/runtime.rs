@@ -26,6 +26,9 @@ pub(super) struct Shared {
     /// Bumped whenever speaker separation is switched on or off; voices and worker results
     /// from an earlier generation are discarded.
     pub speakers_generation: std::sync::atomic::AtomicU64,
+    /// Bumped whenever music rejection is switched on or off; a music decision made before is
+    /// not saved (the event is queued again).
+    pub music_generation: std::sync::atomic::AtomicU64,
     pub wake: Sender<()>,
     pub persist_gate: Mutex<()>,
     published: Mutex<(Instant, Option<CaptureStatus>)>,
@@ -76,6 +79,7 @@ impl Shared {
             cancel_asr: Arc::new(AtomicBool::new(false)),
             backfill_requested: AtomicBool::new(false),
             speakers_generation: std::sync::atomic::AtomicU64::new(0),
+            music_generation: std::sync::atomic::AtomicU64::new(0),
             wake,
             persist_gate: Mutex::new(()),
             published: Mutex::new((Instant::now() - Duration::from_secs(1), None)),
@@ -1076,6 +1080,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
             }
             set_transcriber(&shared, TranscriberState::Working, Some(&model.model_id));
             let placement = separation.observe(&job);
+            let music_generation = shared.music_generation.load(Ordering::Acquire);
             let result = (|| {
                 let path = job
                     .audio_path
@@ -1119,6 +1124,19 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 break;
             }
             let mut relabelled = Vec::new();
+            // Music rejection was switched since this event was judged music: don't skip it on
+            // a stale decision; queue it again to be judged (or transcribed) under the new setting.
+            let result = match result {
+                Ok((None, _, _)) if shared.music_generation.load(Ordering::Acquire) != music_generation => {
+                    if shared.store.requeue_job(job.event_id).is_err() {
+                        shared.notice("could not queue a recording again after a settings change");
+                    }
+                    let _ = shared.upsert(job.event_id);
+                    set_transcriber(&shared, TranscriberState::Idle, Some(&model.model_id));
+                    continue;
+                }
+                other => other,
+            };
             match result {
                 Ok((heard, gated, _)) => {
                     let music = heard.is_none();

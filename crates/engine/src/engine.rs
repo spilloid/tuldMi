@@ -246,14 +246,22 @@ impl Engine {
         {
             return Err(Error::Other("invalid VAD settings".into()));
         }
-        let (previous_retention, previous_speakers) = {
+        let (previous_retention, previous_speakers, previous_music) = {
             let current = self.shared.settings.lock();
-            (current.retention, current.speakers_enabled)
+            (current.retention, current.speakers_enabled, current.music_rejection)
         };
-        if previous_speakers != settings.speakers_enabled {
-            // Voices and results from before the switch must not survive it, even if it is
-            // switched back before the transcription thread looks (docs/design/speakers.md).
-            self.shared.speakers_generation.fetch_add(1, Ordering::AcqRel);
+        if previous_speakers != settings.speakers_enabled || previous_music != settings.music_rejection {
+            // Voices, speaker results and music decisions from before a switch must not survive
+            // it, even if it is switched back before the transcription thread looks. Bumped under
+            // the persist gate, which every such result is checked and saved under, so a save
+            // either happens wholly before the switch or sees it (docs/design/speakers.md).
+            let _gate = self.shared.persist_gate.lock();
+            if previous_speakers != settings.speakers_enabled {
+                self.shared.speakers_generation.fetch_add(1, Ordering::AcqRel);
+            }
+            if previous_music != settings.music_rejection {
+                self.shared.music_generation.fetch_add(1, Ordering::AcqRel);
+            }
         }
         self.shared.store.save_settings(&settings)?;
         self.request(|reply| Command::Settings(settings.clone(), reply))?;

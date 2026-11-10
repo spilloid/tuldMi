@@ -648,3 +648,49 @@ fn music_is_kept_like_quiet_audio_and_can_be_transcribed_anyway() -> Result<()> 
     assert!(!store.transcribe_anyway(event.id)?, "it's transcribing now, not music");
     Ok(())
 }
+
+#[test]
+fn a_deleted_conversation_start_never_frees_its_speaker_numbers() -> Result<()> {
+    let (_dir, store) = setup()?;
+    let session = store.start_session(0)?;
+    let t0 = noon();
+    // Speaker 1, then Speaker 2, then Speaker 1 again; the prefix with every Speaker 2 is deleted.
+    let a = event_at(&store, &session, Source::System, t0, t0 + 1_000)?;
+    let b = event_at(&store, &session, Source::System, t0 + 2_000, t0 + 3_000)?;
+    let c = event_at(&store, &session, Source::System, t0 + 4_000, t0 + 5_000)?;
+    let one = store.create_person_speaker("Speaker 1", 1, t0)?;
+    let two = store.create_person_speaker("Speaker 2", 2, t0 + 2_000)?;
+    store.save_transcript_with_speakers(a.id, &[segment("a", Some(one.id))], None, "m", SpeakersState::Done)?;
+    store.save_transcript_with_speakers(b.id, &[segment("b", Some(two.id))], None, "m", SpeakersState::Done)?;
+    store.save_transcript_with_speakers(c.id, &[segment("c", Some(one.id))], None, "m", SpeakersState::Done)?;
+    store.delete_event(a.id)?;
+    store.delete_event(b.id)?;
+    let (first, last) = store.conversation_bounds(t0 + 4_000)?;
+    assert_eq!(first, t0 + 4_000);
+    assert_eq!(store.conversation_max_ordinal(first, last)?, 2, "Speaker 2 stays reserved");
+    // An earlier conversation that still exists keeps its own numbers out.
+    let morning = event_at(&store, &session, Source::System, t0 - 3_600_000, t0 - 3_590_000)?;
+    let five = store.create_person_speaker("Speaker 5", 5, t0 - 3_600_000)?;
+    store.save_transcript_with_speakers(morning.id, &[segment("m", Some(five.id))], None, "m", SpeakersState::Done)?;
+    assert_eq!(store.conversation_max_ordinal(first, last)?, 2);
+    Ok(())
+}
+
+#[test]
+fn music_judged_late_still_gets_its_grace() -> Result<()> {
+    let (directory, store) = setup()?;
+    let session = store.start_session(0)?;
+    let path = directory.path().join("audio").join("old-song.ogg");
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    std::fs::write(&path, b"OggS")?;
+    // Recorded long ago (waited in a backlog), judged music just now.
+    let event = insert(&store, &session, 1_000, Some(audio(path)))?;
+    store.next_job()?;
+    store.save_music(event.id, "m")?;
+    // Delete-after-transcription: quiet cutoff is "a day ago", everything else expires.
+    let day_ago = now_ms() - QUIET_AUDIO_GRACE_MS;
+    assert!(store.expire_audio_events_before(i64::MAX, day_ago)?.is_empty(), "judged moments ago: kept");
+    // Age-based retention still goes by the recording.
+    assert_eq!(store.expire_audio_events_before(2_000, 2_000)?.len(), 1);
+    Ok(())
+}

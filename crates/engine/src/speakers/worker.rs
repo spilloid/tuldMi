@@ -3,7 +3,8 @@
 //! sherpa-onnx can end its process from deep inside C++ (`_Exit`), so it never runs in the app:
 //! the worker is a child process started on first use. Any failure (spawn error, crash, timeout,
 //! malformed or invalid reply) kills it; the next request starts a fresh one. After
-//! `MAX_FAILURES` consecutive failures the worker stays off for the rest of the session.
+//! `MAX_FAILURES` consecutive failures of one kind of request (separating, classifying) that kind
+//! stays off for the rest of the session; the other keeps working.
 //! The worker's stderr is discarded; it is never given or shown transcript text.
 
 use super::protocol::{self, Kind, Reply, Sound};
@@ -37,7 +38,8 @@ struct Running {
 pub struct Worker {
     config: WorkerConfig,
     running: Option<Running>,
-    failures: u32,
+    /// Consecutive failures per request kind: [separate, classify].
+    failures: [u32; 2],
     /// Overall time limit per request: this, plus `TIMEOUT_PER_AUDIO` times the audio length.
     base_timeout: Duration,
     /// Set at shutdown: a request in flight gives up within `CANCEL_POLL`.
@@ -56,7 +58,7 @@ impl Worker {
         Worker {
             config,
             running: None,
-            failures: 0,
+            failures: [0; 2],
             base_timeout: Duration::from_secs(30),
             cancel: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
@@ -76,7 +78,12 @@ impl Worker {
 
     /// True once the worker failed `MAX_FAILURES` times in a row.
     pub fn given_up(&self) -> bool {
-        self.failures >= MAX_FAILURES
+        self.given_up_on(Kind::Separate) && self.given_up_on(Kind::Classify)
+    }
+
+    /// True once requests of `kind` failed `MAX_FAILURES` times in a row.
+    pub fn given_up_on(&self, kind: Kind) -> bool {
+        self.failures[kind as usize] >= MAX_FAILURES
     }
 
     /// Separate the speakers in `samples` (16 kHz mono). The reply is validated.
@@ -96,7 +103,7 @@ impl Worker {
     }
 
     fn ask(&mut self, kind: Kind, samples: &[f32]) -> Result<Reply> {
-        if self.given_up() {
+        if self.given_up_on(kind) {
             return Err(Error::Other("the worker is unavailable".into()));
         }
         let duration_ms = samples.len() as i64 / 16;
@@ -105,11 +112,11 @@ impl Worker {
             Ok(reply)
         });
         match &result {
-            Ok(_) => self.failures = 0,
+            Ok(_) => self.failures[kind as usize] = 0,
             Err(_) => {
                 self.stop();
                 if !self.cancel.load(Ordering::Acquire) {
-                    self.failures += 1;
+                    self.failures[kind as usize] += 1;
                 }
             }
         }
@@ -267,7 +274,9 @@ mod tests {
         for _ in 0..MAX_FAILURES {
             assert!(worker.separate(&[0.0; 160]).is_err());
         }
-        assert!(worker.given_up());
+        assert!(worker.given_up_on(Kind::Separate));
+        // One kind giving up doesn't stop the other.
+        assert!(!worker.given_up_on(Kind::Classify) && !worker.given_up());
         assert!(worker.separate(&[0.0; 160]).is_err());
     }
 
@@ -287,7 +296,7 @@ mod tests {
         let started = std::time::Instant::now();
         assert!(worker.separate(&[0.0; 16]).is_err());
         assert!(started.elapsed() < Duration::from_secs(10));
-        assert!(!worker.given_up());
+        assert!(!worker.given_up_on(Kind::Separate));
     }
 
     /// A process that stays alive for 30 s without reading stdin or writing stdout. On Windows
@@ -332,6 +341,6 @@ mod tests {
         assert!(worker.separate(&vec![0.0; 16_000 * 10]).is_err());
         assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
         setter.join().unwrap();
-        assert_eq!(worker.failures, 0, "a cancelled request is not a worker failure");
+        assert_eq!(worker.failures, [0, 0], "a cancelled request is not a worker failure");
     }
 }

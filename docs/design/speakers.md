@@ -140,5 +140,8 @@ Silero, the voice detector, triggers on sung vocals, so music used to be kept an
 - **A music event** is saved `empty` with the note `MUSIC_NOTE`, like quiet clips: no transcript, and its audio is kept as usual. Under delete-after-transcription it gets the quiet clips' 24 h grace.
 - **The timeline** shows it collapsed ("Music · 2 s"). The speech detector chops music into short clips, so consecutive music events become one run ("Music · 40 s · 10 clips") that opens to show each clip.
 - **False positives:** **Transcribe anyway** on a clip or a run requeues it with `audio_events.transcribe_anyway = 1`, which skips the music check.
-- **Any doubt transcribes as before:** the switch off, the classifier or worker missing, a worker failure, or a clip under 1 s.
+- **Any doubt transcribes as before:** the switch off, the classifier or worker missing, a worker failure, a window the classifier couldn't score completely, or a clip under 1 s.
+- **Grace timing:** under delete-after-transcription, a music clip's 24 h grace runs from when it was judged, not from when it was recorded, so a recording that waited in a backlog can still be transcribed anyway.
+- **Switches:** switching Skip music on or off bumps a counter under the persist gate. A music decision made before the switch is not saved; the event is queued again.
+- **Failure limits are per feature:** three failed classifications in a row stop music detection for the session without affecting speaker separation, and the reverse.
 - **Later (0.4.1):** choosing a different model for one section and reprocessing it.

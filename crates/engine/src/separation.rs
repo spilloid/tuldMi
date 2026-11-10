@@ -22,7 +22,7 @@ use crate::models::{SPEAKER_CATALOG, installed_path};
 use crate::speakers::{
     assign::{self, Labelled, Span},
     numbered_label,
-    protocol::Reply,
+    protocol::{Kind, Reply},
     tracker::{Placement, Tracker, VoiceId},
     worker::{Worker, WorkerConfig},
 };
@@ -43,6 +43,8 @@ pub(super) struct Separation {
     gave_up_noticed: bool,
     /// The settings generation the voices held here belong to.
     generation: u64,
+    /// (speakers, music) switches last reconciled with the worker while idle.
+    switches: Option<(bool, bool)>,
 }
 
 /// One backfilled event: its segments' voices and its outcome.
@@ -72,7 +74,7 @@ pub(super) struct Separated {
 
 impl Separation {
     pub fn new() -> Self {
-        Separation { worker: None, live: Tracker::default(), number_from: None, backfill: None, gave_up_noticed: false, generation: 0 }
+        Separation { worker: None, live: Tracker::default(), number_from: None, backfill: None, gave_up_noticed: false, generation: 0, switches: None }
     }
 
     /// Call on every loop of the transcription thread. Switching the feature off forgets every
@@ -89,6 +91,17 @@ impl Separation {
             if self.backfill.take().is_some() {
                 set_backfill(shared, None);
             }
+        }
+        let switches = {
+            let settings = shared.settings.lock();
+            (settings.speakers_enabled, settings.music_rejection)
+        };
+        if idle && self.switches != Some(switches) {
+            // A feature switched while idle: start, reconfigure or stop the worker now, not at
+            // the next recording (a worker nothing needs any more doesn't linger).
+            self.switches = Some(switches);
+            let state = self.check(shared);
+            set_state(shared, state);
         }
         if !shared.settings.lock().speakers_enabled {
             // The worker itself stays if music rejection still needs it; `check` reconfigures it.
@@ -157,13 +170,11 @@ impl Separation {
             }
             _ => self.worker = None,
         }
-        if self.worker.as_ref().is_some_and(Worker::given_up) {
+        if self.worker.as_ref().is_some_and(|w| w.given_up_on(Kind::Separate)) && state == SeparationState::Ready {
             if !std::mem::replace(&mut self.gave_up_noticed, true) {
-                shared.notice("speaker separation and music detection stopped after repeated failures; transcripts are unaffected. Restart tuldMi to try again");
+                shared.notice("speaker separation stopped after repeated failures; transcripts are unaffected. Restart tuldMi to try again");
             }
-            if state == SeparationState::Ready {
-                state = SeparationState::Unavailable;
-            }
+            state = SeparationState::Unavailable;
         }
         state
     }
@@ -178,7 +189,7 @@ impl Separation {
         }
         set_state(shared, self.check(shared));
         let worker = self.worker.as_mut()?;
-        if worker.config().sound.is_none() || worker.given_up() {
+        if worker.config().sound.is_none() || worker.given_up_on(Kind::Classify) {
             return None;
         }
         worker.classify(samples).ok()
@@ -188,7 +199,7 @@ impl Separation {
         let worker = self.worker.as_mut()?;
         set_state(shared, SeparationState::Working);
         let reply = worker.separate(samples).ok();
-        set_state(shared, if worker.given_up() { SeparationState::Unavailable } else { SeparationState::Ready });
+        set_state(shared, if worker.given_up_on(Kind::Separate) { SeparationState::Unavailable } else { SeparationState::Ready });
         reply
     }
 
@@ -226,7 +237,7 @@ impl Separation {
             let used = shared
                 .store
                 .conversation_bounds(job.started_at)
-                .and_then(|(first, last)| shared.store.max_speaker_ordinal(first, last))
+                .and_then(|(first, last)| shared.store.conversation_max_ordinal(first, last))
                 .unwrap_or(0);
             self.live.set_numbered(used);
         }
@@ -361,7 +372,7 @@ impl Separation {
             let generation = shared.speakers_generation.load(Ordering::Acquire);
             let samples = crate::encode::read_ogg_opus_16k(&event.audio_path).ok();
             let reply = samples.as_deref().and_then(|s| self.separate_samples(shared, s));
-            if reply.is_none() && samples.is_some() && self.worker.as_ref().is_none_or(Worker::given_up) {
+            if reply.is_none() && samples.is_some() && self.worker.as_ref().is_none_or(|w| w.given_up_on(Kind::Separate)) {
                 // The worker is gone for the session: leave the conversation untouched.
                 set_backfill(shared, None);
                 return;

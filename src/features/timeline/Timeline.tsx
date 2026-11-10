@@ -451,7 +451,10 @@ function ConversationBlock({
             />
           );
           if (item.events.length === 1) return row(item.events[0], c.events[c.events.indexOf(item.events[0]) - 1]);
-          return <MusicRun key={`m:${item.events[0].id}`} events={item.events} render={row} />;
+          // Open by itself when navigation lands inside it (J/K, a deep link, search, a range):
+          // a selected clip must never be one that isn't drawn.
+          const wanted = item.events.some((e) => e.id === selectedId || e.id === flashId || expanded.has(e.id) || rangeIds.has(e.id));
+          return <MusicRun key={`m:${item.events[0].id}`} events={item.events} render={row} reveal={wanted} />;
         })}
       </div>
     </section>
@@ -472,8 +475,9 @@ function groupMusic(events: SpeechEvent[]): { events: SpeechEvent[] }[] {
 
 /** A run of music clips, collapsed to one row; opening it shows each clip (to play it, or to
  *  transcribe one anyway). "Transcribe anyway" on the run applies to every clip in it. */
-function MusicRun({ events, render }: { events: SpeechEvent[]; render: (ev: SpeechEvent, prev: SpeechEvent | undefined) => React.ReactNode }) {
-  const [open, setOpen] = useState(false);
+function MusicRun({ events, render, reveal }: { events: SpeechEvent[]; render: (ev: SpeechEvent, prev: SpeechEvent | undefined) => React.ReactNode; reveal: boolean }) {
+  const [userOpen, setOpen] = useState(false);
+  const open = userOpen || reveal;
   const actions = useEventActions();
   const first = events[0];
   const span = Math.max(...events.map((e) => e.endedAt)) - first.startedAt;
@@ -483,7 +487,7 @@ function MusicRun({ events, render }: { events: SpeechEvent[]; render: (ev: Spee
       <div className="grid grid-cols-[56px_minmax(0,1fr)] items-center rounded-lg hover:bg-hover">
         <div className="select-none pr-3 text-right font-mono text-[11px] text-faint tnum">{clock(first.startedAt)}</div>
         <div className="flex items-center gap-2 py-1.5 text-base text-faint">
-          <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="inline-flex items-center gap-1.5 rounded hover:text-text">
+          <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} disabled={reveal} className="inline-flex items-center gap-1.5 rounded hover:text-text disabled:cursor-default">
             <ChevronRight size={13} className={`transition-transform ${open ? "rotate-90" : ""}`} aria-hidden />
             <Music size={14} aria-hidden />
             <span className="italic">

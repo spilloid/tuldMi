@@ -83,7 +83,11 @@ fn main() -> ExitCode {
         };
         let reply = match (kind, &speakers, &tagger) {
             (Kind::Separate, Some((diarizer, extractor)), _) => separate(diarizer, extractor, &samples),
-            (Kind::Classify, _, Some(tagger)) => Reply { sound: Some(classify(tagger, &samples)), ..Reply::default() },
+            (Kind::Classify, _, Some(tagger)) => match classify(tagger, &samples) {
+                Some(sound) => Reply { sound: Some(sound), ..Reply::default() },
+                // Never guess: the engine transcribes the event as usual.
+                None => Reply { error: Some("classification failed".into()), ..Reply::default() },
+            },
             _ => Reply { error: Some("not loaded".into()), ..Reply::default() },
         };
         if protocol::write_reply(&mut output, &reply).is_err() {
@@ -93,8 +97,10 @@ fn main() -> ExitCode {
 }
 
 /// The highest score of each class over the event, in windows of at most 10 s. Taking the
-/// maximum is the cautious choice: any window with speech keeps the event as speech.
-fn classify(tagger: &AudioTagging, samples: &[f32]) -> Sound {
+/// maximum is the cautious choice: any window with speech keeps the event as speech. None if any
+/// window couldn't be scored completely (a missing class or a non-finite score): a window that
+/// failed must never count as "no speech".
+fn classify(tagger: &AudioTagging, samples: &[f32]) -> Option<Sound> {
     let mut sound = Sound::default();
     for window in samples.chunks(SOUND_WINDOW) {
         let mut audio = window.to_vec();
@@ -102,13 +108,16 @@ fn classify(tagger: &AudioTagging, samples: &[f32]) -> Sound {
         let stream = tagger.create_stream();
         stream.accept_waveform(RATE as i32, &audio);
         let events = tagger.compute(&stream, 527);
-        let p = |i: i32| events.iter().find(|e| e.index == i).map_or(0.0, |e| e.prob).clamp(0.0, 1.0);
-        let p = |i: i32| if p(i).is_finite() { p(i) } else { 0.0 };
-        sound.speech = sound.speech.max(p(SPEECH));
-        sound.music = sound.music.max(p(MUSIC));
-        sound.singing = sound.singing.max(SINGING.iter().map(|&i| p(i)).fold(0.0, f32::max));
+        let p = |i: i32| events.iter().find(|e| e.index == i).map(|e| e.prob).filter(|p| p.is_finite() && (0.0..=1.0).contains(p));
+        sound.speech = sound.speech.max(p(SPEECH)?);
+        sound.music = sound.music.max(p(MUSIC)?);
+        let mut singing = 0.0f32;
+        for i in SINGING {
+            singing = singing.max(p(i)?);
+        }
+        sound.singing = sound.singing.max(singing);
     }
-    sound
+    Some(sound)
 }
 
 fn load_speakers(segmentation: String, embedding: String) -> Option<(OfflineSpeakerDiarization, SpeakerEmbeddingExtractor)> {

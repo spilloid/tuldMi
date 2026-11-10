@@ -455,6 +455,21 @@ impl Store {
         Ok(self.finish_job(event_id, &[], None, model_id, Some(MUSIC_NOTE), None)?.0)
     }
 
+    /// Put a running job back in the queue without counting an attempt (its decision went stale).
+    pub fn requeue_job(&self, event_id: Uuid) -> Result<()> {
+        let mut connection = self.connection.lock();
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let id = event_id.to_string();
+        tx.execute(
+            "UPDATE transcription_jobs SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = ?2
+             WHERE event_id = ?1 AND state = 'running'",
+            params![id, now_ms()],
+        )?;
+        tx.execute("UPDATE audio_events SET status = 'queued' WHERE id = ?1 AND status = 'transcribing'", [&id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// "Transcribe anyway" on an event judged music: requeue it and skip the music check from
     /// now on. False if it isn't a music event with its audio still kept.
     pub fn transcribe_anyway(&self, event_id: Uuid) -> Result<bool> {
@@ -723,10 +738,39 @@ impl Store {
         Ok(found.unwrap_or((at, at)))
     }
 
-    /// The highest speaker number already used in the conversation whose events start within
-    /// `[from, to]`, to continue numbering after a restart. Uses each speaker's stored ordinal
-    /// and first-shown time, so a renamed speaker, or one whose segments were all deleted, never
-    /// has its number reused.
+    /// Where speakers of the conversation `[first, last]` may have been first shown: from just
+    /// after the previous surviving event of that day ended (or the day's start) up to `last`.
+    /// Wider than the conversation on purpose: if its first events were deleted, speakers first
+    /// shown in them still count. That can skip a number, never reuse one.
+    pub fn numbering_window(&self, first: i64, last: i64) -> Result<(i64, i64)> {
+        let day = crate::speakers::tracker::local_day_start(first);
+        let previous: Option<i64> = self.connection.lock().query_row(
+            "SELECT MAX(ended_at) FROM audio_events WHERE started_at >= ?1 AND started_at < ?2",
+            [day, first],
+            |row| row.get(0),
+        )?;
+        Ok((previous.map_or(day, |end| end + 1), last))
+    }
+
+    /// The highest speaker number already used in the conversation, to continue numbering after
+    /// a restart: speakers first shown within `numbering_window`, and speakers its events (those
+    /// starting within `[first, last]`) still show. Uses each speaker's stored ordinal, so a
+    /// renamed speaker, or one whose segments were all deleted, never has its number reused.
+    pub fn conversation_max_ordinal(&self, first: i64, last: i64) -> Result<u32> {
+        let (from, to) = self.numbering_window(first, last)?;
+        Ok(self.connection.lock().query_row(
+            "SELECT COALESCE(MAX(ordinal), 0) FROM speakers p
+             WHERE p.kind = 'person' AND (
+                 (p.seen_at >= ?1 AND p.seen_at <= ?2)
+                 OR EXISTS (SELECT 1 FROM transcript_segments s JOIN audio_events e ON e.id = s.event_id
+                            WHERE s.speaker_id = p.id AND e.started_at >= ?3 AND e.started_at <= ?2))",
+            [from, to, first],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// The highest speaker number used by speakers first shown, or still shown, within
+    /// `[from, to]`.
     pub fn max_speaker_ordinal(&self, from: i64, to: i64) -> Result<u32> {
         // Speakers first shown in the conversation, and speakers its events still show (one
         // first shown in an event since deleted is still counted through its other segments).
@@ -1086,12 +1130,19 @@ impl Store {
         cutoff: i64,
         quiet_cutoff: i64,
     ) -> Result<Vec<(Uuid, Option<PathBuf>)>> {
-        // ?1 cutoff, ?2 quiet cutoff, ?3 quiet note, ?5 music note (music gets the quiet grace).
+        // ?1 cutoff, ?2 quiet cutoff, ?3 quiet note, ?5 music note. Quiet audio's grace runs from
+        // the recording; music's from when it was judged music (the job finishing), so a
+        // recording that waited in a backlog still gets its full grace to be transcribed anyway.
+        // Age-based policies pass the same cutoff for both, and judge music by the recording too.
         // Internal SQL; values are bound.
         const ELIGIBLE: &str = "FROM audio_assets a JOIN audio_events e ON e.asset_id = a.id
              WHERE a.rel_path IS NOT NULL AND a.expired_at IS NULL
              AND e.status IN ('done', 'empty')
-             AND e.ended_at < CASE WHEN e.status = 'empty' AND (e.error IS ?3 OR e.error IS ?5) THEN ?2 ELSE ?1 END";
+             AND CASE
+                 WHEN e.status = 'empty' AND e.error IS ?5 AND ?1 != ?2 THEN
+                     COALESCE((SELECT j.updated_at FROM transcription_jobs j WHERE j.event_id = e.id), e.ended_at) < ?2
+                 WHEN e.status = 'empty' AND (e.error IS ?3 OR e.error IS ?5) THEN e.ended_at < ?2
+                 ELSE e.ended_at < ?1 END";
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let expired = {
