@@ -142,6 +142,8 @@ impl Separation {
             let settings = shared.settings.lock();
             (settings.speakers_enabled, settings.music_rejection)
         };
+        // Whatever path reconciles the worker, housekeeping now knows which switches it reflects.
+        self.switches = Some((speakers_on, music_on));
         let program = shared.config.speaker_worker.clone().filter(|p| p.is_file());
         let speakers = if speakers_on {
             shared.store.installed_models().ok().and_then(|installed| {
@@ -274,7 +276,7 @@ impl Separation {
     ) -> crate::Result<(SpeechEvent, Vec<Uuid>)> {
         // Under the persist gate now: separation switched off (or off and on) since the worker
         // answered means these voices were dismissed. Save the words only, never separated.
-        if shared.speakers_generation.load(Ordering::Acquire) != separated.generation {
+        if shared.speakers_generation.load(Ordering::Acquire) != separated.generation || !shared.settings.lock().speakers_enabled {
             self.live.reset();
             let plain: Vec<NewSegment> =
                 separated.labelled.into_iter().map(|l| NewSegment { speaker_id: None, ..l.segment }).collect();
@@ -433,7 +435,7 @@ fn commit_backfill(shared: &Shared, tracker: &Tracker, generation: u64, results:
     let states: Vec<(Uuid, SpeakersState)> = results.iter().map(|(event, _, _, state)| (*event, *state)).collect();
     let _gate = shared.persist_gate.lock();
     // Switched off (or off and on) while this conversation was processed: save nothing.
-    if shared.speakers_generation.load(Ordering::Acquire) != generation {
+    if shared.speakers_generation.load(Ordering::Acquire) != generation || !shared.settings.lock().speakers_enabled {
         return;
     }
     match shared.store.save_backfill(&speakers, &segments, &states) {

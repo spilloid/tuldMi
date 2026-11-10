@@ -1025,6 +1025,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
             );
             if loaded.as_ref() != Some(&key) {
                 if failed.as_ref() == Some(&key) {
+                    separation.housekeep(&shared, true);
                     let _ = waking.recv_timeout(Duration::from_secs(1));
                     continue;
                 }
@@ -1127,7 +1128,10 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
             // Music rejection was switched since this event was judged music: don't skip it on
             // a stale decision; queue it again to be judged (or transcribed) under the new setting.
             let result = match result {
-                Ok((None, _, _)) if shared.music_generation.load(Ordering::Acquire) != music_generation => {
+                Ok((None, _, _))
+                    if shared.music_generation.load(Ordering::Acquire) != music_generation
+                        || !shared.settings.lock().music_rejection =>
+                {
                     if shared.store.requeue_job(job.event_id).is_err() {
                         shared.notice("could not queue a recording again after a settings change");
                     }

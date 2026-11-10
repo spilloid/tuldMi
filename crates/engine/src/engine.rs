@@ -250,12 +250,21 @@ impl Engine {
             let current = self.shared.settings.lock();
             (current.retention, current.speakers_enabled, current.music_rejection)
         };
+        self.shared.store.save_settings(&settings)?;
         if previous_speakers != settings.speakers_enabled || previous_music != settings.music_rejection {
             // Voices, speaker results and music decisions from before a switch must not survive
             // it, even if it is switched back before the transcription thread looks. Bumped under
             // the persist gate, which every such result is checked and saved under, so a save
             // either happens wholly before the switch or sees it (docs/design/speakers.md).
+            // The switches take effect here too, together with the bump: no work can start under
+            // the new generation while the old setting is still in force. (The full settings
+            // follow below through the capture thread, with the same values.)
             let _gate = self.shared.persist_gate.lock();
+            {
+                let mut current = self.shared.settings.lock();
+                current.speakers_enabled = settings.speakers_enabled;
+                current.music_rejection = settings.music_rejection;
+            }
             if previous_speakers != settings.speakers_enabled {
                 self.shared.speakers_generation.fetch_add(1, Ordering::AcqRel);
             }
@@ -263,7 +272,6 @@ impl Engine {
                 self.shared.music_generation.fetch_add(1, Ordering::AcqRel);
             }
         }
-        self.shared.store.save_settings(&settings)?;
         self.request(|reply| Command::Settings(settings.clone(), reply))?;
         let _ = self.shared.wake.try_send(());
         if previous_retention != settings.retention {
