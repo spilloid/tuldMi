@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use tuldmi_engine::storage::{NewAudio, NewEvent, NewSegment, Store};
+use tuldmi_engine::storage::{NewAudio, NewEvent, NewSegment, SpeakersState, Store};
 use tuldmi_engine::types::{McpSettings, Source};
 use uuid::Uuid;
 
@@ -44,6 +44,10 @@ fn history() -> History {
         "great the deck is what the board wants",
         Some(NewAudio { path: clip, sample_rate: 16_000, duration_ms: 5_000, bytes: audio.len() as i64, peaks: vec![1] }),
     );
+    // The Remote event's speaker was separated and renamed: names are Remote content.
+    let dana = store.create_person_speaker("Dana", 1).unwrap();
+    let segment = NewSegment { start_ms: 0, end_ms: 5_000, text: "great the deck is what the board wants".into(), confidence: None, speaker_id: Some(dana.id) };
+    store.save_transcript_with_speakers(remote, &[segment], Some("en"), "tiny", SpeakersState::Done).unwrap();
     let old = add(Source::Mic, now() - 40 * DAY, "an old deck from last month", None);
     History { dir, me, remote, old, audio }
 }
@@ -178,6 +182,11 @@ fn remote_stays_hidden_until_included() {
     let event = c.call("get_event", json!({ "id": h.me.to_string() }));
     assert_eq!(event["structuredContent"]["event"]["source"], "me");
     assert_eq!(event["structuredContent"]["event"]["text"], "I will send the deck tonight");
+    // A separated speaker's name is Remote content: nowhere while Remote is off.
+    let at = event["structuredContent"]["event"]["started"].as_str().unwrap().to_string();
+    for result in [found, recent, c.call("conversation_at", json!({ "time": at })), status] {
+        assert!(!result.to_string().contains("Dana"), "speaker name leaked: {result}");
+    }
     c.finish();
 }
 
@@ -197,6 +206,13 @@ fn both_sides_and_audio_when_allowed() {
     let conversation = c.call("conversation_at", json!({ "time": at }));
     let events: Vec<String> = conversation["structuredContent"]["conversation"]["events"].as_array().unwrap().iter().map(|e| e["id"].as_str().unwrap().to_string()).collect();
     assert_eq!(events, vec![h.me.to_string(), h.remote.to_string()], "one conversation, oldest first");
+    // With Remote included, separated speakers are named.
+    let remote = c.call("get_event", json!({ "id": h.remote.to_string() }));
+    assert_eq!(remote["structuredContent"]["event"]["text"], "Dana: great the deck is what the board wants");
+    assert_eq!(remote["structuredContent"]["event"]["speakers"], json!(["Dana"]));
+    assert_eq!(remote["structuredContent"]["event"]["segments"][0]["speaker"], "Dana");
+    let matches = c.call("search", json!({ "query": "board" }));
+    assert_eq!(matches["structuredContent"]["matches"][0]["speaker"], "Dana");
 
     let audio = c.call("get_audio", json!({ "id": h.remote.to_string() }));
     assert_eq!(audio["content"][1]["type"], "audio");

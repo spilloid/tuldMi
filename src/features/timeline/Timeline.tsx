@@ -3,11 +3,11 @@ import { ArrowDown, Copy, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SpeechEvent } from "../../lib/ipc/types";
 import type { Conversation } from "../../lib/time";
-import { buildTimeline, clock, dayKey, dayLabel, humanDuration, participants, speakerKeys, speakerOrder } from "../../lib/time";
+import { buildTimeline, clock, dayKey, dayLabel, humanDuration, participants, speakerKeys, speakerOrder, startOfDay } from "../../lib/time";
 import { DayIndex } from "./DayIndex";
 import { isTypingTarget, overlayOpen, plain } from "../../lib/keys";
 import { transition, useReducedMotion } from "../../lib/motion";
-import { useStatus, useTimeline } from "../../state/hooks";
+import { useBackend, useStatus, useTimeline } from "../../state/hooks";
 import { useUi } from "../../state/ui";
 import { EventRow } from "./EventRow";
 import { useEventActions } from "./actions";
@@ -237,6 +237,7 @@ export function Timeline({ routeEventId }: { routeEventId?: string }) {
                 conversation={row.conversation}
                 selectedId={ui.selectedId}
                 rangeIds={rangeIds}
+                partial={hasMore && row.conversation.events[0]?.id === events[0]?.id}
                 expanded={ui.expanded}
                 flashId={ui.flashId}
                 arrived={arrivedIds.current}
@@ -361,6 +362,7 @@ function ConversationBlock({
   conversation: c,
   selectedId,
   rangeIds,
+  partial,
   expanded,
   flashId,
   arrived,
@@ -371,6 +373,8 @@ function ConversationBlock({
   conversation: Conversation;
   selectedId: string | null;
   rangeIds: Set<string>;
+  /** Older history isn't loaded yet and this conversation may continue into it. */
+  partial: boolean;
   expanded: Set<string>;
   flashId: string | null;
   arrived: Set<string>;
@@ -379,7 +383,29 @@ function ConversationBlock({
   onRange: (id: string) => void;
 }) {
   const actions = useEventActions();
+  const backend = useBackend();
   const order = useMemo(() => speakerOrder(c.events), [c.events]);
+  // The whole conversation, even the part not loaded yet: a conversation never crosses local
+  // midnight, so fetch that day's earlier events and group them the way the timeline does.
+  const copyConversation = async () => {
+    let events = c.events;
+    if (partial) {
+      const dayStart = startOfDay(c.startedAt);
+      let oldest = events[0];
+      const older = [];
+      for (;;) {
+        const page = await backend.listEvents({ before: oldest.startedAt, beforeId: oldest.id }, 200);
+        older.push(...page.filter((e) => e.startedAt >= dayStart));
+        if (page.length < 200 || page[page.length - 1].startedAt < dayStart) break;
+        oldest = page[page.length - 1];
+      }
+      const rows = buildTimeline([...older, ...events]);
+      const last = events[events.length - 1].id;
+      const whole = rows.find((r) => r.kind === "conversation" && r.conversation.events.some((e) => e.id === last));
+      if (whole?.kind === "conversation") events = whole.conversation.events;
+    }
+    await actions.copyTranscript(events, "Conversation");
+  };
   const who = participants(c.events);
   const whoText = who.length > 1 ? `${who.slice(0, -1).join(", ")} & ${who[who.length - 1]}` : who.join("");
   const dur = c.endedAt - c.startedAt;
@@ -399,7 +425,7 @@ function ConversationBlock({
           {copyable && (
             <button
               type="button"
-              onClick={() => void actions.copyTranscript(c.events, "Conversation")}
+              onClick={() => void copyConversation().catch(() => actions.copyTranscript(c.events, "Loaded part of the conversation"))}
               className="ml-auto inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-muted opacity-0 transition-opacity hover:bg-hover hover:text-text focus-visible:opacity-100 group-hover/conv:opacity-100"
             >
               <Copy size={12} aria-hidden />

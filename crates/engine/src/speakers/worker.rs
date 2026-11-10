@@ -40,6 +40,9 @@ pub struct Worker {
     base_timeout: Duration,
     /// Set at shutdown: a request in flight gives up within `CANCEL_POLL`.
     cancel: Arc<AtomicBool>,
+    /// Tests only: run the program with these arguments instead of the model paths.
+    #[cfg(test)]
+    args: Option<Vec<String>>,
 }
 
 const CANCEL_POLL: Duration = Duration::from_millis(100);
@@ -54,6 +57,8 @@ impl Worker {
             failures: 0,
             base_timeout: Duration::from_secs(30),
             cancel: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            args: None,
         }
     }
 
@@ -99,35 +104,51 @@ impl Worker {
             self.running = Some(self.spawn()?);
         }
         let running = self.running.as_mut().ok_or_else(|| Error::Other("worker missing".into()))?;
-        protocol::write_request(&mut running.stdin, samples)
-            .map_err(|_| Error::Other("speaker worker stopped".into()))?;
         let audio = Duration::from_millis(samples.len() as u64 / 16);
         let deadline = Instant::now() + self.base_timeout + audio * TIMEOUT_PER_AUDIO;
-        loop {
-            if self.cancel.load(Ordering::Acquire) {
-                return Err(Error::Other("speaker separation cancelled".into()));
-            }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Err(Error::Other("speaker worker timed out".into()));
-            }
-            match running.replies.recv_timeout(left.min(CANCEL_POLL)) {
-                Ok(Ok(reply)) => return Ok(reply),
-                Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => {
-                    return Err(Error::Other("speaker worker stopped".into()));
+        let cancel = &self.cancel;
+        let Running { child, stdin, replies } = running;
+        // The request (megabytes of audio) is written on its own thread: a worker that is alive
+        // but not reading would otherwise block this one in `write` before any deadline or
+        // cancellation check. Killing the child breaks the pipe and frees the writer.
+        std::thread::scope(|scope| {
+            let writer = scope.spawn(move || protocol::write_request(stdin, samples));
+            let result = loop {
+                if cancel.load(Ordering::Acquire) {
+                    break Err(Error::Other("speaker separation cancelled".into()));
                 }
-                Err(RecvTimeoutError::Timeout) => continue,
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    break Err(Error::Other("speaker worker timed out".into()));
+                }
+                match replies.recv_timeout(left.min(CANCEL_POLL)) {
+                    Ok(Ok(reply)) => break Ok(reply),
+                    Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => {
+                        break Err(Error::Other("speaker worker stopped".into()));
+                    }
+                    Err(RecvTimeoutError::Timeout) => continue,
+                }
+            };
+            if result.is_err() {
+                let _ = child.kill();
             }
-        }
+            match (result, writer.join()) {
+                (Ok(reply), Ok(Ok(()))) => Ok(reply),
+                (Ok(_), _) => Err(Error::Other("speaker worker answered before reading the request".into())),
+                (Err(e), _) => Err(e),
+            }
+        })
     }
 
     fn spawn(&self) -> Result<Running> {
         let mut command = Command::new(&self.config.program);
+        command.arg("--segmentation").arg(&self.config.segmentation).arg("--embedding").arg(&self.config.embedding);
+        #[cfg(test)]
+        if let Some(args) = &self.args {
+            command = Command::new(&self.config.program);
+            command.args(args);
+        }
         command
-            .arg("--segmentation")
-            .arg(&self.config.segmentation)
-            .arg("--embedding")
-            .arg(&self.config.embedding)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -184,6 +205,12 @@ impl Worker {
         self.base_timeout = base;
         self
     }
+
+    #[cfg(test)]
+    fn with_args(mut self, args: &[&str]) -> Self {
+        self.args = Some(args.iter().map(|a| a.to_string()).collect());
+        self
+    }
 }
 
 impl Drop for Worker {
@@ -227,5 +254,50 @@ mod tests {
         assert!(worker.separate(&[0.0; 16]).is_err());
         assert!(started.elapsed() < Duration::from_secs(10));
         assert!(!worker.given_up());
+    }
+
+    /// A process that stays alive for 30 s without reading stdin or writing stdout. On Windows
+    /// `waitfor` (each test needs its own signal name: two can't wait on one at once).
+    fn deaf(name: &'static str) -> Option<(&'static str, Vec<&'static str>)> {
+        #[cfg(windows)]
+        // Waits for a signal nobody sends: no stdin reads, no stdout until it times out.
+        let (program, args) = ("C:\\Windows\\System32\\waitfor.exe", vec!["/t", "30", name]);
+        #[cfg(not(windows))]
+        let (program, args) = ("/bin/sleep", vec!["30"]);
+        #[cfg(not(windows))]
+        let _ = name;
+        std::path::Path::new(program).exists().then_some((program, args))
+    }
+
+    /// Ten seconds of audio is far more than a pipe buffer: the write itself blocks. The
+    /// deadline must still hold, and the stuck child must be killed.
+    #[test]
+    fn a_worker_that_never_reads_cannot_block_the_write() {
+        let Some((program, args)) = deaf("tuldmiTestBlockedWrite") else { return };
+        let mut worker = Worker::new(config(program)).with_args(&args).with_timeout(Duration::from_millis(300));
+        let started = std::time::Instant::now();
+        assert!(worker.separate(&vec![0.0; 16_000 * 10]).is_err());
+        // 300 ms base + 2 × 10 s of audio is the deadline; it must not wait for the child's 30 s.
+        assert!(started.elapsed() < Duration::from_secs(25), "took {:?}", started.elapsed());
+        assert!(worker.running.is_none(), "the stuck worker is stopped");
+    }
+
+    /// Shutdown frees a request stuck in the write within a moment, and isn't a failure.
+    #[test]
+    fn cancellation_frees_a_blocked_write() {
+        let Some((program, args)) = deaf("tuldmiTestCancelledWrite") else { return };
+        let mut worker = Worker::new(config(program)).with_args(&args);
+        let cancel = Arc::new(AtomicBool::new(false));
+        worker.set_cancel(cancel.clone());
+        let flag = cancel.clone();
+        let setter = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            flag.store(true, Ordering::Release);
+        });
+        let started = std::time::Instant::now();
+        assert!(worker.separate(&vec![0.0; 16_000 * 10]).is_err());
+        assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
+        setter.join().unwrap();
+        assert_eq!(worker.failures, 0, "a cancelled request is not a worker failure");
     }
 }

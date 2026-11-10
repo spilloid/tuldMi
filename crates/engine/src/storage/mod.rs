@@ -498,14 +498,80 @@ impl Store {
 
     // ---- remote speakers (docs/design/speakers.md) ------------------------------------------
 
-    /// A new separated remote speaker ("Speaker N"). Never carries an embedding.
-    pub fn create_person_speaker(&self, label: &str) -> Result<Speaker> {
+    /// A new separated remote speaker: label "Speaker N", `ordinal` N. The ordinal survives
+    /// renames so numbering in the conversation can continue past it. Never an embedding.
+    pub fn create_person_speaker(&self, label: &str, ordinal: u32) -> Result<Speaker> {
         let speaker = Speaker { id: Uuid::now_v7(), label: label.into(), kind: "person".into() };
         self.connection.lock().execute(
-            "INSERT INTO speakers (id, label, kind, created_at) VALUES (?1, ?2, 'person', ?3)",
-            params![speaker.id.to_string(), speaker.label, now_ms()],
+            "INSERT INTO speakers (id, label, kind, created_at, ordinal) VALUES (?1, ?2, 'person', ?3, ?4)",
+            params![speaker.id.to_string(), speaker.label, now_ms(), ordinal],
         )?;
         Ok(speaker)
+    }
+
+    /// Save a whole backfilled conversation in one transaction: its new speakers, the segments
+    /// given to them, and each event's outcome. Events that were separated (or re-transcribed,
+    /// which replaces segment ids) in the meantime are left alone. Returns the events touched.
+    pub fn save_backfill(
+        &self,
+        speakers: &[(Uuid, String, u32)],
+        segments: &[(Uuid, Uuid)],
+        states: &[(Uuid, SpeakersState)],
+    ) -> Result<Vec<Uuid>> {
+        let mut connection = self.connection.lock();
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut events = Vec::new();
+        {
+            let mut open = tx.prepare_cached(
+                "SELECT 1 FROM audio_events WHERE id = ?1 AND speakers_state IS NULL",
+            )?;
+            let mut eligible = Vec::new();
+            for (event, _) in states {
+                if open.exists([event.to_string()])? {
+                    eligible.push(*event);
+                }
+            }
+            let mut insert = tx.prepare_cached(
+                "INSERT INTO speakers (id, label, kind, created_at, ordinal) VALUES (?1, ?2, 'person', ?3, ?4)",
+            )?;
+            for (id, label, ordinal) in speakers {
+                insert.execute(params![id.to_string(), label, now_ms(), ordinal])?;
+            }
+            let mut owner = tx.prepare_cached("SELECT event_id FROM transcript_segments WHERE id = ?1")?;
+            let mut update = tx.prepare_cached("UPDATE transcript_segments SET speaker_id = ?2 WHERE id = ?1")?;
+            for (segment, speaker) in segments {
+                let event = owner.query_row([segment.to_string()], |row| read::uuid(row, 0)).optional()?;
+                // Only segments of events this backfill still owns; a segment that is gone or
+                // belongs to an event separated meanwhile keeps whatever it has.
+                if let Some(event) = event.filter(|e| eligible.contains(e)) {
+                    update.execute(params![segment.to_string(), speaker.to_string()])?;
+                    if !events.contains(&event) {
+                        events.push(event);
+                    }
+                }
+            }
+            let mut state = tx.prepare_cached(
+                "UPDATE audio_events SET speakers_state = ?2 WHERE id = ?1 AND speakers_state IS NULL",
+            )?;
+            for (event, outcome) in states {
+                if eligible.contains(event) {
+                    state.execute(params![event.to_string(), outcome.as_str()])?;
+                    if !events.contains(event) {
+                        events.push(*event);
+                    }
+                }
+            }
+        }
+        // Speakers nothing ended up showing (every event they were in moved on) aren't kept.
+        for (id, _, _) in speakers {
+            tx.execute(
+                "DELETE FROM speakers WHERE id = ?1
+                 AND NOT EXISTS (SELECT 1 FROM transcript_segments s WHERE s.speaker_id = speakers.id)",
+                [id.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(events)
     }
 
     /// Give existing segments to a speaker (None = back to the event's speaker). Returns the
@@ -571,35 +637,40 @@ impl Store {
         Ok(events)
     }
 
-    /// Start of the conversation containing an event that starts at `at`: walk back through
-    /// earlier events (either source) while each gap is at most `gap_ms` (the timeline's rule).
-    pub fn conversation_start(&self, at: i64, gap_ms: i64) -> Result<i64> {
+    /// Start of the conversation containing an event that starts at `at`, by the timeline's
+    /// rule (`speakers::tracker::continues`): events of that local day up to `at`, grouped in
+    /// order with the running latest end, so a long event bridges the shorter ones inside it.
+    pub fn conversation_start(&self, at: i64) -> Result<i64> {
         let connection = self.connection.lock();
         let mut statement = connection.prepare_cached(
-            "SELECT started_at, ended_at FROM audio_events WHERE started_at < ?1
-             ORDER BY started_at DESC",
+            "SELECT started_at, ended_at FROM audio_events WHERE started_at >= ?1 AND started_at <= ?2
+             ORDER BY started_at, id",
         )?;
-        let mut rows = statement.query([at])?;
-        let mut start = at;
+        let mut rows = statement.query([crate::speakers::tracker::local_day_start(at), at])?;
+        let mut group: Option<(i64, i64)> = None;
         while let Some(row) = rows.next()? {
             let (started, ended): (i64, i64) = (row.get(0)?, row.get(1)?);
-            if start - ended > gap_ms {
-                break;
-            }
-            start = start.min(started);
+            group = match group {
+                Some((first, end)) if crate::speakers::tracker::continues(first, end, started) => Some((first, end.max(ended))),
+                _ => Some((started, ended)),
+            };
         }
-        Ok(start)
+        Ok(match group {
+            Some((first, end)) if crate::speakers::tracker::continues(first, end, at) => first.min(at),
+            _ => at,
+        })
     }
 
-    /// How many separated speakers events starting at or after `from` already show (to
-    /// continue numbering in a conversation after a restart).
-    pub fn person_speakers_since(&self, from: i64) -> Result<u32> {
+    /// The highest speaker number already shown in events starting within `[from, to]` (one
+    /// conversation), to continue numbering after a restart. Uses the stored ordinal, so a
+    /// renamed or deleted speaker's number is never reused.
+    pub fn max_speaker_ordinal(&self, from: i64, to: i64) -> Result<u32> {
         Ok(self.connection.lock().query_row(
-            "SELECT COUNT(DISTINCT s.speaker_id) FROM transcript_segments s
+            "SELECT COALESCE(MAX(p.ordinal), 0) FROM transcript_segments s
              JOIN audio_events e ON e.id = s.event_id
              JOIN speakers p ON p.id = s.speaker_id AND p.kind = 'person'
-             WHERE e.started_at >= ?1",
-            [from],
+             WHERE e.started_at >= ?1 AND e.started_at <= ?2",
+            [from, to],
             |row| row.get(0),
         )?)
     }
@@ -633,11 +704,7 @@ impl Store {
     /// qualifies when every system event in it is done, has its audio, and was never separated
     /// (`empty` ones are ignored); any other system event skips the whole conversation, since
     /// voices can only be linked across a conversation processed whole and in order.
-    pub fn next_backfill_conversation(
-        &self,
-        after: i64,
-        gap_ms: i64,
-    ) -> Result<Option<(i64, Vec<BackfillEvent>)>> {
+    pub fn next_backfill_conversation(&self, after: i64) -> Result<Option<(i64, Vec<BackfillEvent>)>> {
         struct Row {
             id: Uuid,
             system: bool,
@@ -657,6 +724,7 @@ impl Store {
             )?;
             let mut rows = statement.query([after])?;
             let mut group: Vec<Row> = Vec::new();
+            let mut first = i64::MIN;
             let mut reach = i64::MIN;
             let mut found = None;
             loop {
@@ -678,7 +746,7 @@ impl Store {
                 };
                 let boundary = match &next {
                     None => true,
-                    Some(row) => !group.is_empty() && row.started - reach > gap_ms,
+                    Some(row) => !group.is_empty() && !crate::speakers::tracker::continues(first, reach, row.started),
                 };
                 if boundary && !group.is_empty() {
                     let mut events = Vec::new();
@@ -705,7 +773,12 @@ impl Store {
                 }
                 match next {
                     Some(row) => {
-                        reach = if group.is_empty() { row.ended } else { reach.max(row.ended) };
+                        if group.is_empty() {
+                            first = row.started;
+                            reach = row.ended;
+                        } else {
+                            reach = reach.max(row.ended);
+                        }
                         group.push(row);
                     }
                     None => break,

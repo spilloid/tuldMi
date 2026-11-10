@@ -102,7 +102,7 @@ Off by default. When you switch it on (Settings → Transcription → Speakers):
   tuldMi computes a numeric "embedding" of each voice it hears. That is biometric information
   about other people, so it is never written to disk or logged: it lives only in the app's
   memory, for the current conversation, and is dropped when the conversation ends (3 minutes
-  without speech), when you switch separation off, or when you quit. After a restart tuldMi
+  without speech, or midnight), as soon as you switch separation off, or when you quit. After a restart tuldMi
   can't tell that a voice is someone it heard before; it keeps numbering instead.
 - **Names you type are stored** with your transcripts (renaming "Speaker 2" to "Dana" saves
   "Dana"). They are deleted with the events that use them.

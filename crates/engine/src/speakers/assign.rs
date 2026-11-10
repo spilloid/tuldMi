@@ -30,7 +30,9 @@ pub struct Labelled {
     pub voice: Option<VoiceId>,
 }
 
-/// Share of a segment's overlapped speech one label needs to take the whole segment.
+/// Share one label needs to take a whole segment: of the segment's overlapped speech, and of at
+/// least half its length (so a segment mostly outside every turn isn't given to whoever covers
+/// a sliver of it; Whisper segments include pauses, which turns don't).
 pub const WHOLE_SEGMENT_SHARE: f64 = 0.6;
 /// Another label needs this much overlap (and `SPLIT_MIN_SHARE` of it) before a segment splits.
 const SPLIT_MIN_MS: i64 = 1_000;
@@ -59,12 +61,14 @@ fn shares(start: i64, end: i64, spans: &[Span]) -> Vec<(Option<VoiceId>, i64)> {
     out
 }
 
-/// The label that covers at least `share` of the interval's overlapped speech, else None.
+/// The label that covers at least `share` of the interval's overlapped speech and of half its
+/// length (so at least 30% of it at the default share), else None.
 pub fn majority(start: i64, end: i64, spans: &[Span], share: f64) -> Option<VoiceId> {
     let shares = shares(start, end, spans);
     let total: i64 = shares.iter().map(|(_, ms)| ms).sum();
+    let base = total.max((end - start) / 2);
     match shares.first() {
-        Some(&(voice, ms)) if total > 0 && ms as f64 >= share * total as f64 => voice,
+        Some(&(voice, ms)) if base > 0 && ms as f64 >= share * base as f64 => voice,
         _ => None,
     }
 }
@@ -220,6 +224,10 @@ mod tests {
         assert_eq!(label(&[seg(0, 2_000, "x")], &[vec![]], &spans)[0].voice, None);
         assert_eq!(majority(0, 2_000, &spans, WHOLE_SEGMENT_SHARE), None);
         assert_eq!(majority(0, 1_500, &spans, WHOLE_SEGMENT_SHARE), Some(0));
+        // One second of a ten-second segment is not "most of it", whoever else is silent.
+        let sliver = [span(0, 1_000, Some(0))];
+        assert_eq!(majority(0, 10_000, &sliver, WHOLE_SEGMENT_SHARE), None);
+        assert_eq!(majority(0, 3_000, &[span(0, 1_000, Some(0))], WHOLE_SEGMENT_SHARE), Some(0));
     }
 
     #[test]

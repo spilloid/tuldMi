@@ -502,3 +502,87 @@ fn time_ordered_search_ignores_excluded_transcripts() -> Result<()> {
     assert_eq!(visible("alpha alpha alpha alpha beta")?, visible("beta beta beta beta alpha")?);
     Ok(())
 }
+
+// ---- remote speakers (docs/design/speakers.md) ------------------------------------------------
+
+fn noon() -> i64 {
+    crate::speakers::tracker::local_day_start(chrono::Local::now().timestamp_millis()) + 12 * 3_600_000
+}
+
+fn event_at(store: &Store, session: &Session, source: Source, start: i64, end: i64) -> Result<SpeechEvent> {
+    store.insert_event(&NewEvent { session_id: session.id, source, started_at: start, ended_at: end, audio: None })
+}
+
+fn segment(text: &str, speaker: Option<Uuid>) -> NewSegment {
+    NewSegment { start_ms: 0, end_ms: 50, text: text.into(), confidence: None, speaker_id: speaker }
+}
+
+#[test]
+fn conversation_start_follows_long_events_that_bridge_gaps() -> Result<()> {
+    let (_dir, store) = setup()?;
+    let session = store.start_session(0)?;
+    let t0 = noon();
+    // A spans five minutes; B sits inside it; C starts just after A ends. One conversation.
+    event_at(&store, &session, Source::System, t0, t0 + 300_000)?;
+    event_at(&store, &session, Source::Mic, t0 + 1_000, t0 + 2_000)?;
+    event_at(&store, &session, Source::System, t0 + 300_001, t0 + 310_000)?;
+    assert_eq!(store.conversation_start(t0 + 300_001)?, t0);
+    // Exactly the gap after the latest end starts a new conversation (the timeline's rule).
+    let gap = crate::speakers::tracker::CONVERSATION_GAP_MS;
+    event_at(&store, &session, Source::System, t0 + 310_000 + gap, t0 + 320_000 + gap)?;
+    assert_eq!(store.conversation_start(t0 + 310_000 + gap)?, t0 + 310_000 + gap);
+    Ok(())
+}
+
+#[test]
+fn speaker_numbers_stay_within_their_conversation_and_are_never_reused() -> Result<()> {
+    let (_dir, store) = setup()?;
+    let session = store.start_session(0)?;
+    let t0 = noon();
+    let morning = event_at(&store, &session, Source::System, t0 - 3_600_000, t0 - 3_590_000)?;
+    let afternoon = event_at(&store, &session, Source::System, t0, t0 + 10_000)?;
+    let two = store.create_person_speaker("Speaker 2", 2)?;
+    let four = store.create_person_speaker("Speaker 4", 4)?;
+    store.save_transcript_with_speakers(afternoon.id, &[segment("a", Some(four.id))], None, "m", SpeakersState::Done)?;
+    store.save_transcript_with_speakers(morning.id, &[segment("b", Some(two.id))], None, "m", SpeakersState::Done)?;
+    // The morning conversation only counts its own speakers, not the afternoon's.
+    assert_eq!(store.max_speaker_ordinal(t0 - 3_600_000, t0 - 3_590_000)?, 2);
+    // A renamed speaker keeps its number; "Speaker 1" being gone doesn't make 2 reusable.
+    store.rename_speaker(two.id, "Dana")?;
+    assert_eq!(store.max_speaker_ordinal(t0 - 3_600_000, t0 - 3_590_000)?, 2);
+    assert_eq!(store.max_speaker_ordinal(t0, t0 + 10_000)?, 4);
+    Ok(())
+}
+
+#[test]
+fn a_backfill_save_leaves_events_separated_meanwhile_alone() -> Result<()> {
+    let (_dir, store) = setup()?;
+    let session = store.start_session(0)?;
+    let t0 = noon();
+    let open = event_at(&store, &session, Source::System, t0, t0 + 1_000)?;
+    let taken = event_at(&store, &session, Source::System, t0 + 2_000, t0 + 3_000)?;
+    let (_, open_ids) = store.save_transcript_with_speakers(open.id, &[segment("x", None)], None, "m", SpeakersState::Done)
+?;
+    // `open` stays unseparated for the test: reset its state the way the backfill finds it.
+    store.connection.lock().execute("UPDATE audio_events SET speakers_state = NULL WHERE id = ?1", [open.id.to_string()])?;
+    let live = store.create_person_speaker("Speaker 1", 1)?;
+    let (_, taken_ids) = store.save_transcript_with_speakers(taken.id, &[segment("y", Some(live.id))], None, "m", SpeakersState::Done)?;
+
+    let new = Uuid::now_v7();
+    let unused = Uuid::now_v7();
+    let touched = store.save_backfill(
+        &[(new, "Speaker 1".into(), 1), (unused, "Speaker 2".into(), 2)],
+        &[(open_ids[0], new), (taken_ids[0], new)],
+        &[(open.id, SpeakersState::Done), (taken.id, SpeakersState::Done)],
+    )?;
+    assert_eq!(touched, vec![open.id]);
+    let open = store.get_event(open.id)?.unwrap();
+    assert_eq!(open.segments[0].speaker.as_ref().map(|s| s.id), Some(new));
+    // The live-separated event keeps its own speaker.
+    let taken = store.get_event(taken.id)?.unwrap();
+    assert_eq!(taken.segments[0].speaker.as_ref().map(|s| s.id), Some(live.id));
+    // A speaker nothing shows isn't kept.
+    let kept: i64 = store.connection.lock().query_row("SELECT COUNT(*) FROM speakers WHERE id = ?1", [unused.to_string()], |r| r.get(0))?;
+    assert_eq!(kept, 0);
+    Ok(())
+}

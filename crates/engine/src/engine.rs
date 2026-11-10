@@ -343,10 +343,10 @@ impl Engine {
     }
     /// Rename a separated remote speaker; every event showing them is re-announced.
     pub fn rename_speaker(&self, id: Uuid, label: &str) -> Result<()> {
-        let events = {
-            let _gate = self.shared.persist_gate.lock();
-            self.shared.store.rename_speaker(id, label)?
-        };
+        // Announced under the gate: a rename's update can't land after a deletion or a later
+        // rename of the same speaker.
+        let _gate = self.shared.persist_gate.lock();
+        let events = self.shared.store.rename_speaker(id, label)?;
         separation::announce(&self.shared, events);
         Ok(())
     }

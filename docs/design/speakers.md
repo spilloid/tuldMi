@@ -46,7 +46,7 @@ sherpa-onnx's C++ code calls `_Exit()` in about 25 places: bad input, short segm
 - It writes nothing else to stdout. The parent discards its stderr. It never sees text.
 
 **How the engine manages it:**
-- It starts the worker on first need. It kills the worker on shutdown and after any protocol error or timeout. The timeout is 30 s plus 2× the audio length.
+- It starts the worker on first need. It kills the worker on shutdown and after any protocol error or timeout. The timeout is 30 s plus 2× the audio length, and it covers writing the request too: the write runs on its own thread, so a worker that stops reading can't block the transcription thread.
 - It starts a new worker for the next request.
 - After 3 consecutive failures it stops for the session, with one notice.
 
@@ -61,7 +61,7 @@ The tracker holds a conversation's voices in memory:
 - how much speech each voice has;
 - the speaker row each voice has been given, if any.
 
-**A conversation** follows the timeline's rule: a new one starts after a gap of more than 3 minutes between events of either source. The transcription thread reports mic events too, so a long stretch of you talking doesn't split the meeting.
+**A conversation** follows the timeline's rule exactly (`tracker::continues`, the same predicate as `buildTimeline`): an event continues it when it starts on the same local day and less than 3 minutes after the latest end so far, over events of either source. The tracker, the backfill's grouping and the restart lookup all use that one predicate. The transcription thread reports mic events too, so a long stretch of you talking doesn't split the meeting.
 
 **Matching a local speaker:**
 - If its embedding's cosine similarity to the best centroid is at least 0.5, it joins that voice, and the centroid becomes the speech-weighted mean.
@@ -74,7 +74,7 @@ The tracker holds a conversation's voices in memory:
 
 **Out-of-order events** (a retry of an old event) skip separation, leaving `speakers_state` NULL. The backfill can handle them later.
 
-**After a restart** inside a conversation, numbering continues past the person speakers that conversation already uses. Voices can't be re-linked, because no embeddings were kept. That's the privacy trade-off.
+**After a restart** inside a conversation, numbering continues past the highest number that conversation already shows. Each speaker row stores its number (`speakers.ordinal`), so a renamed or deleted speaker's number is never reused, and the lookup is bounded to the conversation. Voices can't be re-linked, because no embeddings were kept. That's the privacy trade-off.
 
 **Tuning** comes from a spike on the AMI Meeting Corpus (CC BY 4.0):
 
@@ -90,9 +90,9 @@ The tracker holds a conversation's voices in memory:
 - still has retained audio;
 - has `speakers_state` NULL.
 
-It runs on the transcription thread only when no transcription job is waiting. It processes one conversation at a time, in order, with a fresh tracker.
+It runs on the transcription thread only when no transcription job is waiting. It processes one conversation at a time, in order, with a fresh tracker. **Nothing is written until the whole conversation is processed**; then its speakers, labels and outcomes are saved in one transaction. A conversation interrupted by quitting or switching off therefore stays eligible, and events separated in the meantime are left alone.
 
-**Existing segments aren't re-transcribed.** Each one goes to the speaker that covers at least 60% of it, and otherwise stays Remote. Without token timestamps there is nothing to split on. Progress is shown in Settings.
+**Existing segments aren't re-transcribed.** Each one goes to the speaker that covers at least 60% of its overlapped speech and at least 30% of its length, and otherwise stays Remote. Without token timestamps there is nothing to split on. Progress is shown in Settings.
 
 ## Storage (migration 0003)
 
@@ -104,7 +104,9 @@ CREATE INDEX transcript_segments_speaker ON transcript_segments(speaker_id);
 
 - A segment's `speaker_id` NULL means the event's speaker: Me or Remote.
 - `speakers.embedding` stays NULL. It is never written.
-- Housekeeping deletes `person` speakers that no segment references.
+- `speakers.ordinal` holds the N of "Speaker N" and survives renames.
+- Housekeeping deletes `person` speakers that no segment references (after a day, so a row being written can't be swept).
+- Every re-announcement of a changed event (relabel, rename, backfill) happens under the persist gate, so it can't overtake a deletion.
 - `TranscriptSegment` gains `speaker: Option<Speaker>`.
 - Search hits and MCP results carry the segment speaker's label.
 
@@ -115,11 +117,11 @@ Segments are labelled with their speaker's name. The ceiling is unchanged: a spe
 ## Copying a range (same release)
 
 - **On the timeline:** click an event, Shift+click another, then press Ctrl/⌘+C or use the Copy bar that appears. The copied text has one line per speaker run, in the form `[2026-11-09 14:02:11] Speaker 1: …`.
-- **Copy conversation:** each conversation header has a Copy conversation button that does the same for the whole conversation.
+- **Copy conversation:** each conversation header has a Copy conversation button that does the same for the whole conversation, fetching any part of it not loaded yet.
 
 ## Privacy
 
 - **Network:** models download only after the user consents, from pinned Hugging Face URLs with SHA-256 checks. Nothing else touches the network.
-- **Embeddings:** these are voice fingerprints of other people. They exist only in the app's memory, for the current conversation, and are dropped at the conversation's end, at pause or quit, or when the feature is turned off. They are never written to disk or logged.
+- **Embeddings:** these are voice fingerprints of other people. They exist only in the app's memory, for the current conversation, and are dropped when the conversation ends (checked while idle too, not only when the next event arrives), when the feature is turned off (checked on every loop of the transcription thread), and at quit. A result that arrives after the feature was turned off is discarded. They are never written to disk or logged.
 - **Names** the user types are stored in `speakers.label`. Deleting a conversation's events deletes them, through the orphan cleanup.
 - **PRIVACY.md and README** stop saying "not identified" and describe exactly this.

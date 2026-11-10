@@ -1,15 +1,36 @@
 //! Links the per-event voices the worker finds into the voices of one conversation.
 //!
 //! Pure and in-memory: centroids are voice fingerprints of other people, so they are never
-//! persisted, and they are dropped when the conversation ends (a gap longer than
-//! `CONVERSATION_GAP_MS` between events of either source), when the feature is switched off, or
-//! when the app quits. Tuning comes from the AMI spike in docs/design/speakers.md.
+//! persisted, and they are dropped when the conversation ends (`continues` says no, or nothing
+//! more arrives within `CONVERSATION_GAP_MS`), when the feature is switched off, or when the app
+//! quits. Tuning comes from the AMI spike in docs/design/speakers.md.
 
 use super::protocol::Voice;
+use chrono::TimeZone;
 use uuid::Uuid;
 
 /// The timeline's conversation rule (src/lib/time.ts `CONVERSATION_GAP_MS`).
 pub const CONVERSATION_GAP_MS: i64 = 3 * 60_000;
+
+fn local_day(t: i64) -> Option<chrono::NaiveDate> {
+    chrono::Local.timestamp_millis_opt(t).single().map(|d| d.date_naive())
+}
+
+/// Start of the local day containing `t` (epoch ms).
+pub fn local_day_start(t: i64) -> i64 {
+    local_day(t)
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .and_then(|d| chrono::Local.from_local_datetime(&d).earliest())
+        .map_or(t, |d| d.timestamp_millis())
+}
+
+/// The timeline's conversation rule (src/lib/time.ts `buildTimeline`), shared by every engine
+/// path so labels never span what the timeline shows as two conversations: an event starting at
+/// `next_start` continues a conversation that began at `first_start` and has run until
+/// `max_end` iff it starts on the same local day and less than `CONVERSATION_GAP_MS` after it.
+pub fn continues(first_start: i64, max_end: i64, next_start: i64) -> bool {
+    next_start - max_end < CONVERSATION_GAP_MS && local_day(first_start) == local_day(next_start)
+}
 /// Cosine similarity at or above which a voice joins an existing one.
 pub const MATCH_SIMILARITY: f32 = 0.5;
 /// Speech a voice needs before it may start a new conversation voice (shorter embeddings are
@@ -33,7 +54,9 @@ struct ConversationVoice {
 #[derive(Debug, Default)]
 pub struct Tracker {
     voices: Vec<ConversationVoice>,
-    /// End of the latest event seen (either source); None = no conversation yet.
+    /// Start of the conversation's first event and the latest end seen (either source); None =
+    /// no conversation yet.
+    first_start: Option<i64>,
     last_end: Option<i64>,
     /// Numbers already used in this conversation (continues after a restart).
     numbered: u32,
@@ -54,17 +77,33 @@ impl Tracker {
     /// Report an event of either source, in transcription order. Mic events only keep the
     /// conversation alive; system events are then separated with `assign`.
     pub fn observe(&mut self, started_at: i64, ended_at: i64) -> Placement {
-        match self.last_end {
-            Some(last) if ended_at < last - CONVERSATION_GAP_MS => Placement::OutOfOrder,
-            Some(last) if started_at - last <= CONVERSATION_GAP_MS => {
+        match (self.first_start, self.last_end) {
+            (Some(_), Some(last)) if ended_at < last - CONVERSATION_GAP_MS => Placement::OutOfOrder,
+            // Jobs are queued as events end, so a long event can arrive after a shorter one that
+            // started later; it still belongs to the conversation.
+            (Some(first), Some(last)) if continues(first, last, started_at) => {
+                self.first_start = Some(first.min(started_at));
                 self.last_end = Some(last.max(ended_at));
                 Placement::Continues
             }
             _ => {
                 self.reset();
+                self.first_start = Some(started_at);
                 self.last_end = Some(ended_at);
                 Placement::NewConversation
             }
+        }
+    }
+
+    /// While idle (nothing queued): end the conversation once it can no longer continue, so its
+    /// voices aren't kept in memory past the conversation. True if voices were dropped.
+    pub fn expire_idle(&mut self, now: i64) -> bool {
+        match (self.first_start, self.last_end) {
+            (Some(first), Some(last)) if !continues(first, last, now) => {
+                self.reset();
+                true
+            }
+            _ => false,
         }
     }
 
@@ -191,20 +230,48 @@ mod tests {
         Voice { local, speech_ms: ms, embedding: e.to_vec() }
     }
 
+    /// Local noon today: tests stay clear of midnight in every time zone.
+    fn noon() -> i64 {
+        local_day_start(chrono::Local::now().timestamp_millis()) + 12 * 3_600_000
+    }
+
     #[test]
-    fn conversation_boundaries_follow_the_timeline_gap() {
+    fn conversation_boundaries_follow_the_timeline() {
+        let t0 = noon();
         let mut t = Tracker::default();
-        assert_eq!(t.observe(0, 5_000), Placement::NewConversation);
-        assert_eq!(t.observe(5_000 + CONVERSATION_GAP_MS, 190_000), Placement::Continues);
+        assert_eq!(t.observe(t0, t0 + 5_000), Placement::NewConversation);
+        assert_eq!(t.observe(t0 + 5_000 + CONVERSATION_GAP_MS - 1, t0 + 190_000), Placement::Continues);
+        // A long event queued after a shorter, later one is still part of it.
+        assert_eq!(t.observe(t0 - 1_000, t0 + 191_000), Placement::Continues);
         // A retried event from long before the conversation isn't linked into it.
-        assert_eq!(t.observe(-10 * 60_000, -9 * 60_000), Placement::OutOfOrder);
-        assert_eq!(t.observe(190_001 + CONVERSATION_GAP_MS, 400_000), Placement::NewConversation);
+        assert_eq!(t.observe(t0 - 10 * 60_000, t0 - 9 * 60_000), Placement::OutOfOrder);
+        // Exactly the gap: the timeline starts a new conversation, so does the tracker.
+        assert_eq!(t.observe(t0 + 191_000 + CONVERSATION_GAP_MS, t0 + 400_000), Placement::NewConversation);
+        // So does a new local day, whatever the gap.
+        let midnight = local_day_start(t0) + 24 * 3_600_000;
+        let mut t = Tracker::default();
+        t.observe(midnight - 30_000, midnight - 1_000);
+        assert_eq!(t.observe(midnight + 1_000, midnight + 2_000), Placement::NewConversation);
+        assert!(!continues(midnight - 30_000, midnight - 1_000, midnight + 1_000));
+    }
+
+    #[test]
+    fn idle_conversations_drop_their_voices() {
+        let t0 = noon();
+        let mut t = Tracker::default();
+        t.observe(t0, t0 + 1_000);
+        t.assign(&[voice(0, 4_000, &[1.0, 0.0])]);
+        assert!(!t.expire_idle(t0 + 60_000));
+        assert_eq!(t.voice_count(), 1);
+        assert!(t.expire_idle(t0 + 1_000 + CONVERSATION_GAP_MS));
+        assert_eq!(t.voice_count(), 0);
     }
 
     #[test]
     fn similar_voices_join_and_distinct_voices_split() {
+        let t0 = noon();
         let mut t = Tracker::default();
-        t.observe(0, 1);
+        t.observe(t0, t0 + 1);
         let a = [1.0, 0.0, 0.0];
         let b = [0.0, 1.0, 0.0];
         assert_eq!(t.assign(&[voice(0, 4_000, &a), voice(1, 4_000, &b)]), vec![Some(0), Some(1)]);
@@ -214,7 +281,7 @@ mod tests {
         assert_eq!(t.assign(&[voice(0, 800, &[0.0, 0.0, 1.0])]), vec![None]);
         assert_eq!(t.voice_count(), 2);
         // A new conversation forgets every voice.
-        t.observe(10 * 60_000, 10 * 60_000 + 1);
+        t.observe(t0 + 10 * 60_000, t0 + 10 * 60_000 + 1);
         assert_eq!(t.voice_count(), 0);
     }
 

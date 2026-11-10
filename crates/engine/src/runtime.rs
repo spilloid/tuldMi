@@ -985,6 +985,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
         let mut failed: Option<ModelKey> = None;
         let mut separation = super::separation::Separation::new();
         while !shared.quit.load(Ordering::Acquire) && !shared.cancel_asr.load(Ordering::Acquire) {
+            separation.housekeep(&shared, false);
             let settings = shared.settings.lock().clone();
             let installed = shared.store.installed_models().unwrap_or_else(|_| {
                 shared.notice("could not read installed models");
@@ -998,6 +999,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 loaded = None;
                 failed = None;
                 set_transcriber(&shared, TranscriberState::NoModel, None);
+                separation.housekeep(&shared, true);
                 // Separating past recordings needs no transcription model.
                 if separation.backfilling(&shared) {
                     separation.backfill_step(&shared);
@@ -1050,6 +1052,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 Ok(Some(job)) => job,
                 Ok(None) => {
                     set_transcriber(&shared, TranscriberState::Idle, Some(&model.model_id));
+                    separation.housekeep(&shared, true);
                     // Past recordings are separated only while nothing waits for transcription.
                     if separation.backfilling(&shared) {
                         separation.backfill_step(&shared);
@@ -1209,6 +1212,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
         let mut separation = super::separation::Separation::new();
         while !shared.quit.load(Ordering::Acquire) && !shared.cancel_asr.load(Ordering::Acquire) {
             set_transcriber(&shared, TranscriberState::NoModel, None);
+            separation.housekeep(&shared, true);
             if separation.backfilling(&shared) {
                 separation.backfill_step(&shared);
                 continue;
