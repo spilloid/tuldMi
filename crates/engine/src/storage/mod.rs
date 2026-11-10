@@ -498,13 +498,14 @@ impl Store {
 
     // ---- remote speakers (docs/design/speakers.md) ------------------------------------------
 
-    /// A new separated remote speaker: label "Speaker N", `ordinal` N. The ordinal survives
-    /// renames so numbering in the conversation can continue past it. Never an embedding.
-    pub fn create_person_speaker(&self, label: &str, ordinal: u32) -> Result<Speaker> {
+    /// A new separated remote speaker: label "Speaker N", `ordinal` N, first shown in an event
+    /// starting at `seen_at`. Ordinal and time survive renames and deletions, so numbering in
+    /// the conversation always continues past it. Never an embedding.
+    pub fn create_person_speaker(&self, label: &str, ordinal: u32, seen_at: i64) -> Result<Speaker> {
         let speaker = Speaker { id: Uuid::now_v7(), label: label.into(), kind: "person".into() };
         self.connection.lock().execute(
-            "INSERT INTO speakers (id, label, kind, created_at, ordinal) VALUES (?1, ?2, 'person', ?3, ?4)",
-            params![speaker.id.to_string(), speaker.label, now_ms(), ordinal],
+            "INSERT INTO speakers (id, label, kind, created_at, ordinal, seen_at) VALUES (?1, ?2, 'person', ?3, ?4, ?5)",
+            params![speaker.id.to_string(), speaker.label, now_ms(), ordinal, seen_at],
         )?;
         Ok(speaker)
     }
@@ -514,7 +515,7 @@ impl Store {
     /// which replaces segment ids) in the meantime are left alone. Returns the events touched.
     pub fn save_backfill(
         &self,
-        speakers: &[(Uuid, String, u32)],
+        speakers: &[(Uuid, String, u32, i64)],
         segments: &[(Uuid, Uuid)],
         states: &[(Uuid, SpeakersState)],
     ) -> Result<Vec<Uuid>> {
@@ -532,10 +533,10 @@ impl Store {
                 }
             }
             let mut insert = tx.prepare_cached(
-                "INSERT INTO speakers (id, label, kind, created_at, ordinal) VALUES (?1, ?2, 'person', ?3, ?4)",
+                "INSERT INTO speakers (id, label, kind, created_at, ordinal, seen_at) VALUES (?1, ?2, 'person', ?3, ?4, ?5)",
             )?;
-            for (id, label, ordinal) in speakers {
-                insert.execute(params![id.to_string(), label, now_ms(), ordinal])?;
+            for (id, label, ordinal, seen_at) in speakers {
+                insert.execute(params![id.to_string(), label, now_ms(), ordinal, seen_at])?;
             }
             let mut owner = tx.prepare_cached("SELECT event_id FROM transcript_segments WHERE id = ?1")?;
             let mut update = tx.prepare_cached("UPDATE transcript_segments SET speaker_id = ?2 WHERE id = ?1")?;
@@ -563,7 +564,7 @@ impl Store {
             }
         }
         // Speakers nothing ended up showing (every event they were in moved on) aren't kept.
-        for (id, _, _) in speakers {
+        for (id, _, _, _) in speakers {
             tx.execute(
                 "DELETE FROM speakers WHERE id = ?1
                  AND NOT EXISTS (SELECT 1 FROM transcript_segments s WHERE s.speaker_id = speakers.id)",
@@ -637,39 +638,56 @@ impl Store {
         Ok(events)
     }
 
-    /// Start of the conversation containing an event that starts at `at`, by the timeline's
-    /// rule (`speakers::tracker::continues`): events of that local day up to `at`, grouped in
-    /// order with the running latest end, so a long event bridges the shorter ones inside it.
-    pub fn conversation_start(&self, at: i64) -> Result<i64> {
+    /// The conversation containing an event that starts at `at`, by the timeline's rule
+    /// (`speakers::tracker::continues`): that local day's events grouped in order with the
+    /// running latest end, so a long event bridges the shorter ones inside it. Returns the start
+    /// of its first and of its last event (later events count too: a retried event may come
+    /// before speech that was already separated).
+    pub fn conversation_bounds(&self, at: i64) -> Result<(i64, i64)> {
+        let day = crate::speakers::tracker::local_day_start(at);
         let connection = self.connection.lock();
         let mut statement = connection.prepare_cached(
-            "SELECT started_at, ended_at FROM audio_events WHERE started_at >= ?1 AND started_at <= ?2
+            "SELECT started_at, ended_at FROM audio_events WHERE started_at >= ?1 AND started_at < ?2
              ORDER BY started_at, id",
         )?;
-        let mut rows = statement.query([crate::speakers::tracker::local_day_start(at), at])?;
-        let mut group: Option<(i64, i64)> = None;
+        let mut rows = statement.query([day, day + 26 * 3_600_000])?;
+        // (first start, latest end, last start) of the group being built.
+        let mut group: Option<(i64, i64, i64)> = None;
+        let mut found: Option<(i64, i64)> = None;
         while let Some(row) = rows.next()? {
             let (started, ended): (i64, i64) = (row.get(0)?, row.get(1)?);
             group = match group {
-                Some((first, end)) if crate::speakers::tracker::continues(first, end, started) => Some((first, end.max(ended))),
-                _ => Some((started, ended)),
+                Some((first, end, _)) if crate::speakers::tracker::continues(first, end, started) => {
+                    Some((first, end.max(ended), started))
+                }
+                Some(done) => {
+                    if done.0 <= at && at <= done.2 {
+                        found = Some((done.0, done.2));
+                        break;
+                    }
+                    Some((started, ended, started))
+                }
+                None => Some((started, ended, started)),
             };
         }
-        Ok(match group {
-            Some((first, end)) if crate::speakers::tracker::continues(first, end, at) => first.min(at),
-            _ => at,
-        })
+        if found.is_none()
+            && let Some((first, _, last)) = group
+            && first <= at
+            && at <= last
+        {
+            found = Some((first, last));
+        }
+        Ok(found.unwrap_or((at, at)))
     }
 
-    /// The highest speaker number already shown in events starting within `[from, to]` (one
-    /// conversation), to continue numbering after a restart. Uses the stored ordinal, so a
-    /// renamed or deleted speaker's number is never reused.
+    /// The highest speaker number already used in the conversation whose events start within
+    /// `[from, to]`, to continue numbering after a restart. Uses each speaker's stored ordinal
+    /// and first-shown time, so a renamed speaker, or one whose segments were all deleted, never
+    /// has its number reused.
     pub fn max_speaker_ordinal(&self, from: i64, to: i64) -> Result<u32> {
         Ok(self.connection.lock().query_row(
-            "SELECT COALESCE(MAX(p.ordinal), 0) FROM transcript_segments s
-             JOIN audio_events e ON e.id = s.event_id
-             JOIN speakers p ON p.id = s.speaker_id AND p.kind = 'person'
-             WHERE e.started_at >= ?1 AND e.started_at <= ?2",
+            "SELECT COALESCE(MAX(ordinal), 0) FROM speakers
+             WHERE kind = 'person' AND seen_at >= ?1 AND seen_at <= ?2",
             [from, to],
             |row| row.get(0),
         )?)

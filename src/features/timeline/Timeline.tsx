@@ -237,7 +237,6 @@ export function Timeline({ routeEventId }: { routeEventId?: string }) {
                 conversation={row.conversation}
                 selectedId={ui.selectedId}
                 rangeIds={rangeIds}
-                partial={hasMore && row.conversation.events[0]?.id === events[0]?.id}
                 expanded={ui.expanded}
                 flashId={ui.flashId}
                 arrived={arrivedIds.current}
@@ -362,7 +361,6 @@ function ConversationBlock({
   conversation: c,
   selectedId,
   rangeIds,
-  partial,
   expanded,
   flashId,
   arrived,
@@ -373,8 +371,6 @@ function ConversationBlock({
   conversation: Conversation;
   selectedId: string | null;
   rangeIds: Set<string>;
-  /** Older history isn't loaded yet and this conversation may continue into it. */
-  partial: boolean;
   expanded: Set<string>;
   flashId: string | null;
   arrived: Set<string>;
@@ -385,26 +381,27 @@ function ConversationBlock({
   const actions = useEventActions();
   const backend = useBackend();
   const order = useMemo(() => speakerOrder(c.events), [c.events]);
-  // The whole conversation, even the part not loaded yet: a conversation never crosses local
-  // midnight, so fetch that day's earlier events and group them the way the timeline does.
+  // The whole conversation, including any part not loaded (an unloaded long event can even
+  // join groups that look separate): a conversation never crosses local midnight, so fetch
+  // that whole day and group it the way the timeline does.
   const copyConversation = async () => {
-    let events = c.events;
-    if (partial) {
-      const dayStart = startOfDay(c.startedAt);
-      let oldest = events[0];
-      const older = [];
-      for (;;) {
-        const page = await backend.listEvents({ before: oldest.startedAt, beforeId: oldest.id }, 200);
-        older.push(...page.filter((e) => e.startedAt >= dayStart));
-        if (page.length < 200 || page[page.length - 1].startedAt < dayStart) break;
-        oldest = page[page.length - 1];
-      }
-      const rows = buildTimeline([...older, ...events]);
-      const last = events[events.length - 1].id;
-      const whole = rows.find((r) => r.kind === "conversation" && r.conversation.events.some((e) => e.id === last));
-      if (whole?.kind === "conversation") events = whole.conversation.events;
+    const dayStart = startOfDay(c.startedAt);
+    const dayEnd = startOfDay(dayStart + 36 * 3_600_000);
+    const day = [];
+    let cursor = { before: dayEnd, beforeId: "" };
+    for (;;) {
+      const page = await backend.listEvents(cursor, 200);
+      day.push(...page.filter((e) => e.startedAt >= dayStart));
+      const oldest = page[page.length - 1];
+      if (page.length < 200 || !oldest || oldest.startedAt < dayStart) break;
+      cursor = { before: oldest.startedAt, beforeId: oldest.id };
     }
-    await actions.copyTranscript(events, "Conversation");
+    // The fetched day already holds the loaded events; one copy each (fresh ones win).
+    const byId = new Map([...c.events, ...day].map((e) => [e.id, e]));
+    const rows = buildTimeline([...byId.values()]);
+    const mine = new Set(c.events.map((e) => e.id));
+    const whole = rows.find((r) => r.kind === "conversation" && r.conversation.events.some((e) => mine.has(e.id)));
+    await actions.copyTranscript(whole?.kind === "conversation" ? whole.conversation.events : c.events, "Conversation");
   };
   const who = participants(c.events);
   const whoText = who.length > 1 ? `${who.slice(0, -1).join(", ")} & ${who[who.length - 1]}` : who.join("");

@@ -41,6 +41,8 @@ pub(super) struct Separation {
     number_from: Option<i64>,
     backfill: Option<Backfill>,
     gave_up_noticed: bool,
+    /// The settings generation the voices held here belong to.
+    generation: u64,
 }
 
 /// One backfilled event: its segments' voices and its outcome.
@@ -52,6 +54,8 @@ struct Backfill {
     /// Remaining events of that conversation, last first.
     pending: Vec<BackfillEvent>,
     tracker: Tracker,
+    /// Start of the conversation's first system event (the new speakers' `seen_at`).
+    started_at: i64,
     /// Per event already processed: its segments' voices and its outcome. Saved together.
     results: Vec<EventResult>,
     conversations: u32,
@@ -66,7 +70,7 @@ pub(super) struct Separated {
 
 impl Separation {
     pub fn new() -> Self {
-        Separation { worker: None, live: Tracker::default(), number_from: None, backfill: None, gave_up_noticed: false }
+        Separation { worker: None, live: Tracker::default(), number_from: None, backfill: None, gave_up_noticed: false, generation: 0 }
     }
 
     /// Call on every loop of the transcription thread. Switching the feature off forgets every
@@ -74,6 +78,17 @@ impl Separation {
     /// idle (`idle`: nothing waits for transcription), a conversation that can no longer
     /// continue is ended, dropping its voices.
     pub fn housekeep(&mut self, shared: &Shared, idle: bool) {
+        let generation = shared.speakers_generation.load(Ordering::Acquire);
+        if generation != self.generation {
+            // Switched off (and maybe on again) since these voices were heard: forget them.
+            self.generation = generation;
+            self.live.reset();
+            self.number_from = None;
+            if let Some(backfill) = &mut self.backfill {
+                backfill.pending.clear();
+                backfill.results.clear();
+            }
+        }
         if !shared.settings.lock().speakers_enabled {
             self.live.reset();
             self.number_from = None;
@@ -173,19 +188,23 @@ impl Separation {
         if !self.ready(shared) {
             return None;
         }
-        if let Some(from) = self.number_from.take() {
+        if self.number_from.take().is_some() {
             // After a restart mid-conversation the voices are gone (never stored): continue
-            // numbering past the speakers this conversation already shows.
+            // numbering past every number this conversation already used, before or after
+            // this event (it may be a retry).
             let used = shared
                 .store
-                .conversation_start(from)
-                .and_then(|start| shared.store.max_speaker_ordinal(start, job.started_at))
+                .conversation_bounds(job.started_at)
+                .and_then(|(first, last)| shared.store.max_speaker_ordinal(first, last))
                 .unwrap_or(0);
             self.live.set_numbered(used);
         }
+        let generation = shared.speakers_generation.load(Ordering::Acquire);
         let reply = self.separate_samples(shared, samples);
-        // Switched off while the worker ran: don't label with voices the user just dismissed.
-        if !shared.settings.lock().speakers_enabled {
+        // Switched off (even if back on) while the worker ran: don't label with voices from
+        // before the switch. `housekeep` forgets them on the next loop.
+        if shared.speakers_generation.load(Ordering::Acquire) != generation || generation != self.generation {
+            self.live.reset();
             return None;
         }
         let Some(reply) = reply else {
@@ -210,7 +229,7 @@ impl Separation {
         language: Option<&str>,
         model_id: &str,
     ) -> crate::Result<(SpeechEvent, Vec<Uuid>)> {
-        let created = create_due(shared, &self.live);
+        let created = create_due(shared, &self.live, job.started_at);
         let speaker = |voice: Option<VoiceId>, live: &Tracker| {
             voice.and_then(|v| live.speaker(v).or_else(|| created.iter().find(|c| c.0 == v).map(|c| c.2)))
         };
@@ -261,6 +280,7 @@ impl Separation {
                 cursor: i64::MIN,
                 pending: Vec::new(),
                 tracker: Tracker::default(),
+                started_at: 0,
                 results: Vec::new(),
                 conversations: 0,
             });
@@ -273,6 +293,7 @@ impl Separation {
                     backfill.cursor = resume;
                     // A qualifying conversation has no separated event, so numbering starts at 1.
                     backfill.tracker = Tracker::default();
+                    backfill.started_at = events.first().map_or(0, |e| e.started_at);
                     backfill.results.clear();
                     events.reverse();
                     backfill.pending = events;
@@ -298,6 +319,7 @@ impl Separation {
             }
         }
         if let Some(event) = backfill.pending.pop() {
+            let generation = shared.speakers_generation.load(Ordering::Acquire);
             let samples = crate::encode::read_ogg_opus_16k(&event.audio_path).ok();
             let reply = samples.as_deref().and_then(|s| self.separate_samples(shared, s));
             if reply.is_none() && samples.is_some() && self.worker.as_ref().is_none_or(Worker::given_up) {
@@ -305,8 +327,11 @@ impl Separation {
                 set_backfill(shared, None);
                 return;
             }
-            if shared.cancel_asr.load(Ordering::Acquire) || !shared.settings.lock().speakers_enabled {
-                return; // shutting down or switched off: nothing of this conversation is saved
+            if shared.cancel_asr.load(Ordering::Acquire)
+                || shared.speakers_generation.load(Ordering::Acquire) != generation
+                || generation != self.generation
+            {
+                return; // shutting down or switched off/on: nothing of this conversation is saved
             }
             let outcome = match reply {
                 Some(reply) => {
@@ -323,7 +348,7 @@ impl Separation {
             backfill.results.push(outcome);
         }
         if backfill.pending.is_empty() && !backfill.results.is_empty() {
-            commit_backfill(shared, &backfill.tracker, std::mem::take(&mut backfill.results));
+            commit_backfill(shared, &backfill.tracker, backfill.started_at, std::mem::take(&mut backfill.results));
         }
         self.backfill = Some(backfill);
     }
@@ -338,13 +363,13 @@ impl Separation {
 /// Save one backfilled conversation: voices with enough speech get "Speaker N" rows (numbered
 /// by first appearance), their segments are labelled, every event gets its outcome; one
 /// transaction, under the persist gate, announced under the gate.
-fn commit_backfill(shared: &Shared, tracker: &Tracker, results: Vec<EventResult>) {
+fn commit_backfill(shared: &Shared, tracker: &Tracker, seen_at: i64, results: Vec<EventResult>) {
     let mut speakers = Vec::new();
     let mut ids: HashMap<VoiceId, Uuid> = HashMap::new();
     for (voice, number) in tracker.due() {
         let id = Uuid::now_v7();
         ids.insert(voice, id);
-        speakers.push((id, numbered_label(number), number));
+        speakers.push((id, numbered_label(number), number, seen_at));
     }
     let segments: Vec<(Uuid, Uuid)> = results
         .iter()
@@ -371,12 +396,12 @@ fn spans(tracker: &mut Tracker, reply: &Reply) -> Vec<Span> {
 }
 
 /// Create speaker rows for voices that just reached the threshold: (voice, number, id).
-fn create_due(shared: &Shared, tracker: &Tracker) -> Vec<(VoiceId, u32, Uuid)> {
+fn create_due(shared: &Shared, tracker: &Tracker, seen_at: i64) -> Vec<(VoiceId, u32, Uuid)> {
     tracker
         .due()
         .into_iter()
         .filter_map(|(voice, number)| {
-            shared.store.create_person_speaker(&numbered_label(number), number).ok().map(|s| (voice, number, s.id))
+            shared.store.create_person_speaker(&numbered_label(number), number, seen_at).ok().map(|s| (voice, number, s.id))
         })
         .collect()
 }

@@ -243,7 +243,15 @@ impl Engine {
         {
             return Err(Error::Other("invalid VAD settings".into()));
         }
-        let previous_retention = self.shared.settings.lock().retention;
+        let (previous_retention, previous_speakers) = {
+            let current = self.shared.settings.lock();
+            (current.retention, current.speakers_enabled)
+        };
+        if previous_speakers != settings.speakers_enabled {
+            // Voices and results from before the switch must not survive it, even if it is
+            // switched back before the transcription thread looks (docs/design/speakers.md).
+            self.shared.speakers_generation.fetch_add(1, Ordering::AcqRel);
+        }
         self.shared.store.save_settings(&settings)?;
         self.request(|reply| Command::Settings(settings.clone(), reply))?;
         let _ = self.shared.wake.try_send(());

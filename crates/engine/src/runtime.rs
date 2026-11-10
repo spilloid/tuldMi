@@ -23,6 +23,9 @@ pub(super) struct Shared {
     pub cancel_asr: Arc<AtomicBool>,
     /// "Separate past recordings" was requested; the transcription thread picks it up when idle.
     pub backfill_requested: AtomicBool,
+    /// Bumped whenever speaker separation is switched on or off; voices and worker results
+    /// from an earlier generation are discarded.
+    pub speakers_generation: std::sync::atomic::AtomicU64,
     pub wake: Sender<()>,
     pub persist_gate: Mutex<()>,
     published: Mutex<(Instant, Option<CaptureStatus>)>,
@@ -72,6 +75,7 @@ impl Shared {
             quit: AtomicBool::new(false),
             cancel_asr: Arc::new(AtomicBool::new(false)),
             backfill_requested: AtomicBool::new(false),
+            speakers_generation: std::sync::atomic::AtomicU64::new(0),
             wake,
             persist_gate: Mutex::new(()),
             published: Mutex::new((Instant::now() - Duration::from_secs(1), None)),

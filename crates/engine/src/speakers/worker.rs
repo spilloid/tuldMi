@@ -113,7 +113,13 @@ impl Worker {
         // cancellation check. Killing the child breaks the pipe and frees the writer.
         std::thread::scope(|scope| {
             let writer = scope.spawn(move || protocol::write_request(stdin, samples));
+            // Supervise until both the write and the reply are complete: a confused worker
+            // could answer early and stop reading, leaving the write (and a join) blocked.
+            let mut reply = None;
             let result = loop {
+                if reply.is_some() && writer.is_finished() {
+                    break Ok(());
+                }
                 if cancel.load(Ordering::Acquire) {
                     break Err(Error::Other("speaker separation cancelled".into()));
                 }
@@ -121,8 +127,12 @@ impl Worker {
                 if left.is_zero() {
                     break Err(Error::Other("speaker worker timed out".into()));
                 }
+                if reply.is_some() {
+                    std::thread::sleep(left.min(Duration::from_millis(5)));
+                    continue;
+                }
                 match replies.recv_timeout(left.min(CANCEL_POLL)) {
-                    Ok(Ok(reply)) => break Ok(reply),
+                    Ok(Ok(r)) => reply = Some(r),
                     Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => {
                         break Err(Error::Other("speaker worker stopped".into()));
                     }
@@ -132,10 +142,12 @@ impl Worker {
             if result.is_err() {
                 let _ = child.kill();
             }
-            match (result, writer.join()) {
-                (Ok(reply), Ok(Ok(()))) => Ok(reply),
-                (Ok(_), _) => Err(Error::Other("speaker worker answered before reading the request".into())),
-                (Err(e), _) => Err(e),
+            // The writer has finished, or the child is dead and its pipe broken: never blocks.
+            let written = writer.join();
+            result?;
+            match (reply, written) {
+                (Some(reply), Ok(Ok(()))) => Ok(reply),
+                _ => Err(Error::Other("speaker worker answered before reading the request".into())),
             }
         })
     }

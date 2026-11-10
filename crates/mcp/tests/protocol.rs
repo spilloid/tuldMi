@@ -45,7 +45,7 @@ fn history() -> History {
         Some(NewAudio { path: clip, sample_rate: 16_000, duration_ms: 5_000, bytes: audio.len() as i64, peaks: vec![1] }),
     );
     // The Remote event's speaker was separated and renamed: names are Remote content.
-    let dana = store.create_person_speaker("Dana", 1).unwrap();
+    let dana = store.create_person_speaker("Dana", 1, t + 10_000).unwrap();
     let segment = NewSegment { start_ms: 0, end_ms: 5_000, text: "great the deck is what the board wants".into(), confidence: None, speaker_id: Some(dana.id) };
     store.save_transcript_with_speakers(remote, &[segment], Some("en"), "tiny", SpeakersState::Done).unwrap();
     let old = add(Source::Mic, now() - 40 * DAY, "an old deck from last month", None);
