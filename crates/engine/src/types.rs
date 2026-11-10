@@ -80,6 +80,30 @@ pub struct CaptureStatus {
     /// Id of the active transcription model, if one is installed and loaded.
     pub model_id: Option<String>,
     pub transcriber: TranscriberState,
+    /// Remote speaker separation (docs/design/speakers.md).
+    pub separation: SeparationStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SeparationState {
+    /// Switched off in settings.
+    #[default]
+    Off,
+    /// Switched on, but one or both speaker models aren't installed.
+    NeedsModels,
+    /// Switched on, but the worker is missing from this install or kept failing this session.
+    Unavailable,
+    Ready,
+    Working,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeparationStatus {
+    pub state: SeparationState,
+    /// While "Separate past recordings" runs: system events it still has to look at.
+    pub backfill_remaining: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

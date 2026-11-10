@@ -21,6 +21,8 @@ pub(super) struct Shared {
     pub config: EngineConfig,
     pub quit: AtomicBool,
     pub cancel_asr: Arc<AtomicBool>,
+    /// "Separate past recordings" was requested; the transcription thread picks it up when idle.
+    pub backfill_requested: AtomicBool,
     pub wake: Sender<()>,
     pub persist_gate: Mutex<()>,
     published: Mutex<(Instant, Option<CaptureStatus>)>,
@@ -64,10 +66,12 @@ impl Shared {
                 backlog,
                 model_id: None,
                 transcriber: TranscriberState::NoModel,
+                separation: SeparationStatus::default(),
             }),
             config,
             quit: AtomicBool::new(false),
             cancel_asr: Arc::new(AtomicBool::new(false)),
+            backfill_requested: AtomicBool::new(false),
             wake,
             persist_gate: Mutex::new(()),
             published: Mutex::new((Instant::now() - Duration::from_secs(1), None)),
@@ -979,6 +983,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
         type ModelKey = (String, PathBuf, Option<std::time::SystemTime>);
         let mut loaded: Option<ModelKey> = None;
         let mut failed: Option<ModelKey> = None;
+        let mut separation = super::separation::Separation::new();
         while !shared.quit.load(Ordering::Acquire) && !shared.cancel_asr.load(Ordering::Acquire) {
             let settings = shared.settings.lock().clone();
             let installed = shared.store.installed_models().unwrap_or_else(|_| {
@@ -993,6 +998,11 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 loaded = None;
                 failed = None;
                 set_transcriber(&shared, TranscriberState::NoModel, None);
+                // Separating past recordings needs no transcription model.
+                if separation.backfilling(&shared) {
+                    separation.backfill_step(&shared);
+                    continue;
+                }
                 let _ = waking.recv_timeout(Duration::from_millis(200));
                 continue;
             };
@@ -1040,6 +1050,11 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 Ok(Some(job)) => job,
                 Ok(None) => {
                     set_transcriber(&shared, TranscriberState::Idle, Some(&model.model_id));
+                    // Past recordings are separated only while nothing waits for transcription.
+                    if separation.backfilling(&shared) {
+                        separation.backfill_step(&shared);
+                        continue;
+                    }
                     let _ = waking.recv_timeout(Duration::from_millis(200));
                     continue;
                 }
@@ -1053,6 +1068,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 shared.notice("could not announce transcription job");
             }
             set_transcriber(&shared, TranscriberState::Working, Some(&model.model_id));
+            let placement = separation.observe(&job);
             let result = (|| {
                 let path = job
                     .audio_path
@@ -1067,8 +1083,16 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 let gated = crate::transcribe::below_energy_gate(&samples);
                 provider
                     .transcribe(&samples, Some(&settings.language))
-                    .map(|transcript| (transcript, gated))
+                    .map(|transcript| (transcript, gated, samples))
             })();
+            // Speakers are separated outside the persist gate (the worker can take seconds) and
+            // saved inside it with the transcript.
+            let separated = match &result {
+                Ok((transcript, gated, samples)) if !(*gated && transcript.segments.is_empty()) => {
+                    separation.separate_live(&shared, &job, placement, samples, transcript)
+                }
+                _ => None,
+            };
             // Never commit after shutdown: the running job is recovered on next startup.
             if shared.cancel_asr.load(Ordering::Acquire) {
                 break;
@@ -1077,8 +1101,9 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
             if shared.cancel_asr.load(Ordering::Acquire) {
                 break;
             }
+            let mut relabelled = Vec::new();
             match result {
-                Ok((transcript, gated)) => {
+                Ok((transcript, gated, _)) => {
                     let untranscribed = gated && transcript.segments.is_empty();
                     let saved = if untranscribed {
                         shared.store.save_untranscribed_quiet(
@@ -1086,6 +1111,13 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                             transcript.language.as_deref(),
                             &model.model_id,
                         )
+                    } else if let Some(separated) = separated {
+                        separation
+                            .commit_live(&shared, &job, separated, transcript.language.as_deref(), &model.model_id)
+                            .map(|(event, others)| {
+                                relabelled = others;
+                                event
+                            })
                     } else {
                         shared.store.save_transcript(
                             job.event_id,
@@ -1165,13 +1197,25 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                     }
                 }
             }
+            super::separation::announce(&shared, relabelled);
             set_transcriber(&shared, TranscriberState::Idle, Some(&model.model_id));
         }
+        separation.shutdown();
     }
+    // Without a transcription backend there is nothing to transcribe, but past recordings can
+    // still have their speakers separated.
     #[cfg(not(feature = "whisper"))]
-    while !shared.quit.load(Ordering::Acquire) {
-        set_transcriber(&shared, TranscriberState::NoModel, None);
-        let _ = waking.recv_timeout(Duration::from_millis(200));
+    {
+        let mut separation = super::separation::Separation::new();
+        while !shared.quit.load(Ordering::Acquire) && !shared.cancel_asr.load(Ordering::Acquire) {
+            set_transcriber(&shared, TranscriberState::NoModel, None);
+            if separation.backfilling(&shared) {
+                separation.backfill_step(&shared);
+                continue;
+            }
+            let _ = waking.recv_timeout(Duration::from_millis(200));
+        }
+        separation.shutdown();
     }
 }
 /// Apply the retention policy with one bounded SQL update (`Store::expire_audio_events_before`),
@@ -1215,6 +1259,16 @@ fn retain(shared: &Shared) -> Vec<Uuid> {
         }
     }
 }
+/// Separated speakers older than this whose segments are all gone are deleted (the age keeps a
+/// speaker the transcription thread just created, and is about to reference, safe).
+const ORPHAN_SPEAKER_AGE_MS: i64 = 86_400_000;
+fn sweep_speakers(shared: &Shared) {
+    let cutoff = chrono::Local::now().timestamp_millis().saturating_sub(ORPHAN_SPEAKER_AGE_MS);
+    let _gate = shared.persist_gate.lock();
+    if shared.store.delete_orphan_speakers(cutoff).is_err() {
+        shared.notice("could not remove unused speaker names");
+    }
+}
 fn announce(shared: &Shared, expired: Vec<Uuid>) {
     for id in expired {
         if shared.upsert(id).is_err() {
@@ -1229,6 +1283,7 @@ pub(super) fn housekeeping(
     requests: Receiver<Sender<()>>,
 ) {
     announce(&shared, retain(&shared));
+    sweep_speakers(&shared);
     let mut last_retention = Instant::now();
     let mut last_recovery = Instant::now();
     let mut last_unlink_retry = Instant::now();
@@ -1246,6 +1301,7 @@ pub(super) fn housekeeping(
         }
         if last_retention.elapsed() >= Duration::from_secs(600) {
             announce(&shared, retain(&shared));
+            sweep_speakers(&shared);
             last_retention = Instant::now();
         }
         shared.publish();

@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::copy(&model, &installed)?;
 
     let sink = Arc::new(Sink(Mutex::new(vec![]), Mutex::new(vec![])));
-    let engine = Engine::start(EngineConfig { data_dir: dir.clone(), vad_model_path: Some(silero), suppress_autostart: true }, sink.clone())?;
+    let engine = Engine::start(EngineConfig { data_dir: dir.clone(), vad_model_path: Some(silero), suppress_autostart: true, speaker_worker: None }, sink.clone())?;
     let entry = tuldmi_engine::models::entry("whisper-tiny.en").ok_or("catalog")?;
     engine.store().record_model(&InstalledModel { model_id: entry.id.into(), path: installed, bytes: entry.size_bytes, sha256: entry.sha256.into() })?;
     let mut s = engine.settings();

@@ -12,7 +12,9 @@ use crossbeam_channel::{Receiver, RecvTimeoutError};
 use std::io;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 pub const MAX_FAILURES: u32 = 3;
 
@@ -36,13 +38,29 @@ pub struct Worker {
     failures: u32,
     /// Overall time limit per request: this, plus `TIMEOUT_PER_AUDIO` times the audio length.
     base_timeout: Duration,
+    /// Set at shutdown: a request in flight gives up within `CANCEL_POLL`.
+    cancel: Arc<AtomicBool>,
 }
+
+const CANCEL_POLL: Duration = Duration::from_millis(100);
 
 const TIMEOUT_PER_AUDIO: u32 = 2;
 
 impl Worker {
     pub fn new(config: WorkerConfig) -> Self {
-        Worker { config, running: None, failures: 0, base_timeout: Duration::from_secs(30) }
+        Worker {
+            config,
+            running: None,
+            failures: 0,
+            base_timeout: Duration::from_secs(30),
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Share the engine's shutdown flag. A cancelled request kills the worker but does not count
+    /// as a failure.
+    pub fn set_cancel(&mut self, cancel: Arc<AtomicBool>) {
+        self.cancel = cancel;
     }
 
     pub fn config(&self) -> &WorkerConfig {
@@ -68,7 +86,9 @@ impl Worker {
             Ok(_) => self.failures = 0,
             Err(_) => {
                 self.stop();
-                self.failures += 1;
+                if !self.cancel.load(Ordering::Acquire) {
+                    self.failures += 1;
+                }
             }
         }
         result
@@ -82,12 +102,22 @@ impl Worker {
         protocol::write_request(&mut running.stdin, samples)
             .map_err(|_| Error::Other("speaker worker stopped".into()))?;
         let audio = Duration::from_millis(samples.len() as u64 / 16);
-        match running.replies.recv_timeout(self.base_timeout + audio * TIMEOUT_PER_AUDIO) {
-            Ok(Ok(reply)) => Ok(reply),
-            Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => {
-                Err(Error::Other("speaker worker stopped".into()))
+        let deadline = Instant::now() + self.base_timeout + audio * TIMEOUT_PER_AUDIO;
+        loop {
+            if self.cancel.load(Ordering::Acquire) {
+                return Err(Error::Other("speaker separation cancelled".into()));
             }
-            Err(RecvTimeoutError::Timeout) => Err(Error::Other("speaker worker timed out".into())),
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(Error::Other("speaker worker timed out".into()));
+            }
+            match running.replies.recv_timeout(left.min(CANCEL_POLL)) {
+                Ok(Ok(reply)) => return Ok(reply),
+                Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => {
+                    return Err(Error::Other("speaker worker stopped".into()));
+                }
+                Err(RecvTimeoutError::Timeout) => continue,
+            }
         }
     }
 

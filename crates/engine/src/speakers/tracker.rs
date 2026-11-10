@@ -73,6 +73,12 @@ impl Tracker {
         *self = Tracker::default();
     }
 
+    /// Forget the voices but stay in the conversation and keep its numbering (a voice's speaker
+    /// row was lost, so its label can't be trusted any more).
+    pub fn forget_voices(&mut self) {
+        self.voices.clear();
+    }
+
     /// Start numbering after `used` speakers this conversation already shows (e.g. from before
     /// a restart, whose voices can't be re-linked because nothing about them was kept).
     pub fn set_numbered(&mut self, used: u32) {

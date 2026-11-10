@@ -74,8 +74,10 @@ pub fn read_request(input: &mut impl Read) -> io::Result<Option<Vec<f32>>> {
     input.read_exact(&mut bytes)?;
     Ok(Some(
         bytes
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .map(|s| if s.is_finite() { s.clamp(-1.0, 1.0) } else { 0.0 })
             .collect(),
     ))

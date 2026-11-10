@@ -93,6 +93,9 @@ pub struct BackfillEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Job {
     pub event_id: Uuid,
+    pub source: Source,
+    pub started_at: i64,
+    pub ended_at: i64,
     pub attempts: u32,
     /// Absolute path of the event's audio. None if the audio is gone (job will fail).
     pub audio_path: Option<PathBuf>,
@@ -601,13 +604,28 @@ impl Store {
         )?)
     }
 
-    /// Delete separated speakers that no segment shows any more (their events were deleted).
-    pub fn delete_orphan_speakers(&self) -> Result<usize> {
+    /// Delete separated speakers created before `created_before` that no segment shows any more
+    /// (their events were deleted). The age guard leaves alone a speaker the transcription
+    /// thread is about to reference.
+    pub fn delete_orphan_speakers(&self, created_before: i64) -> Result<usize> {
         Ok(self.connection.lock().execute(
-            "DELETE FROM speakers WHERE kind = 'person'
+            "DELETE FROM speakers WHERE kind = 'person' AND created_at < ?1
              AND NOT EXISTS (SELECT 1 FROM transcript_segments s WHERE s.speaker_id = speakers.id)",
-            [],
+            [created_before],
         )?)
+    }
+
+    /// Delete the given separated speakers if nothing references them (a failed save).
+    pub fn delete_unused_speakers(&self, ids: &[Uuid]) -> Result<()> {
+        let connection = self.connection.lock();
+        let mut delete = connection.prepare_cached(
+            "DELETE FROM speakers WHERE id = ?1 AND kind = 'person'
+             AND NOT EXISTS (SELECT 1 FROM transcript_segments s WHERE s.speaker_id = speakers.id)",
+        )?;
+        for id in ids {
+            delete.execute([id.to_string()])?;
+        }
+        Ok(())
     }
 
     /// The earliest conversation starting after `after` that the backfill can separate, with
@@ -749,13 +767,22 @@ impl Store {
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let next = tx
             .query_row(
-                "SELECT event_id, attempts FROM transcription_jobs WHERE state = 'queued'
-             ORDER BY enqueued_at, event_id LIMIT 1",
+                "SELECT j.event_id, j.attempts, e.source, e.started_at, e.ended_at
+                 FROM transcription_jobs j JOIN audio_events e ON e.id = j.event_id
+                 WHERE j.state = 'queued' ORDER BY j.enqueued_at, j.event_id LIMIT 1",
                 [],
-                |row| Ok((read::uuid(row, 0)?, row.get::<_, u32>(1)?)),
+                |row| {
+                    Ok((
+                        read::uuid(row, 0)?,
+                        row.get::<_, u32>(1)?,
+                        read::source(row, 2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
             )
             .optional()?;
-        let job = if let Some((event_id, attempts)) = next {
+        let job = if let Some((event_id, attempts, source, started_at, ended_at)) = next {
             tx.execute(
                 "UPDATE transcription_jobs SET state = 'running', attempts = attempts + 1,
                  updated_at = ?2 WHERE event_id = ?1",
@@ -767,6 +794,9 @@ impl Store {
             )?;
             Some(Job {
                 event_id,
+                source,
+                started_at,
+                ended_at,
                 attempts: attempts + 1,
                 audio_path: read::live_path(&tx, &self.data_dir, event_id)?,
             })

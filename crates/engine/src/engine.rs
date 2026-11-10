@@ -64,6 +64,9 @@ pub struct EngineConfig {
     pub vad_model_path: Option<PathBuf>,
     /// Override for tests: never start capture automatically even if settings say so.
     pub suppress_autostart: bool,
+    /// The `tuldmi-speakers` worker installed with the app. None = speaker separation is
+    /// unavailable in this build (Settings says so).
+    pub speaker_worker: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -75,6 +78,8 @@ pub enum ExportFormat {
 
 #[path = "runtime.rs"]
 mod runtime;
+#[path = "separation.rs"]
+mod separation;
 use crate::dispatch::Dispatcher;
 use crate::{Error, models::ModelManager};
 use crossbeam_channel::{Sender, bounded};
@@ -331,6 +336,33 @@ impl Engine {
     }
     pub fn list_models(&self) -> Result<Vec<ModelInfo>> {
         self.models.list()
+    }
+    /// The two models speaker separation needs (download them with `download_model`).
+    pub fn speaker_models(&self) -> Result<Vec<ModelInfo>> {
+        self.models.speaker_models()
+    }
+    /// Rename a separated remote speaker; every event showing them is re-announced.
+    pub fn rename_speaker(&self, id: Uuid, label: &str) -> Result<()> {
+        let events = {
+            let _gate = self.shared.persist_gate.lock();
+            self.shared.store.rename_speaker(id, label)?
+        };
+        separation::announce(&self.shared, events);
+        Ok(())
+    }
+    /// Start separating speakers in past conversations whose audio is still kept. Runs on the
+    /// transcription thread whenever nothing waits for transcription. Returns how many system
+    /// events could be looked at (0 = nothing to do).
+    pub fn separate_past_recordings(&self) -> Result<u32> {
+        if !self.shared.settings.lock().speakers_enabled {
+            return Err(Error::Other("turn on speaker separation first".into()));
+        }
+        let candidates = self.shared.store.backfill_candidates()?;
+        if candidates > 0 {
+            self.shared.backfill_requested.store(true, Ordering::Release);
+            let _ = self.shared.wake.try_send(());
+        }
+        Ok(candidates)
     }
     pub fn download_model(&self, model_id: &str) -> Result<()> {
         self.models.download(model_id)

@@ -67,7 +67,7 @@ fn speech_clip() -> Vec<f32> {
 }
 
 fn config(dir: &std::path::Path) -> EngineConfig {
-    EngineConfig { data_dir: dir.to_path_buf(), vad_model_path: None, suppress_autostart: true }
+    EngineConfig { data_dir: dir.to_path_buf(), vad_model_path: None, suppress_autostart: true, speaker_worker: None }
 }
 
 fn onboarded(engine: &Engine, mic: bool, system: bool) {
