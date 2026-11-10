@@ -23,6 +23,8 @@ interface Props {
   selected: boolean;
   /** Inside the Shift+click range being copied. */
   inRange: boolean;
+  /** The conversation's separated speakers by first appearance (picks each one's colour). */
+  speakerOrder: Map<string, number>;
   expanded: boolean;
   flash: boolean;
   arrived: boolean;
@@ -31,7 +33,7 @@ interface Props {
   onRange: (id: string) => void;
 }
 
-export const EventRow = memo(function EventRow({ ev, showLabel, showTime, selected, inRange, expanded, flash, arrived, onSelect, onToggle, onRange }: Props) {
+export const EventRow = memo(function EventRow({ ev, showLabel, showTime, selected, inRange, speakerOrder, expanded, flash, arrived, onSelect, onToggle, onRange }: Props) {
   const reduced = useReducedMotion();
   const me = ev.source === "mic";
   const actions = useEventActions();
@@ -93,6 +95,7 @@ export const EventRow = memo(function EventRow({ ev, showLabel, showTime, select
             {(showLabel || expanded) && (
               <div className="mb-0.5 flex items-center gap-2">
                 <SpeakerName
+                  order={runs[0]?.speaker ? speakerOrder.get(runs[0].speaker.id) : undefined}
                   speaker={separated ? (runs[0]?.speaker ?? null) : null}
                   label={separated ? (runs[0]?.label ?? sourceLabel(ev)) : sourceLabel(ev)}
                   className={`text-[12px] font-semibold tracking-[0.01em] ${me ? "text-me-text" : "text-remote-text"}`}
@@ -103,7 +106,7 @@ export const EventRow = memo(function EventRow({ ev, showLabel, showTime, select
                 {isPlaying && <AudioLines size={12} className="text-accent-text" aria-label="Playing" />}
               </div>
             )}
-            {!(expanded && ev.status === "done" && ev.segments.length > 1) && <EventBody ev={ev} runs={separated ? runs : null} onRetry={() => void actions.retry(ev)} />}
+            {!(expanded && ev.status === "done" && ev.segments.length > 1) && <EventBody ev={ev} runs={separated ? runs : null} order={speakerOrder} onRetry={() => void actions.retry(ev)} />}
           </div>
           <AnimatePresence initial={false}>
             {expanded && (
@@ -115,7 +118,7 @@ export const EventRow = memo(function EventRow({ ev, showLabel, showTime, select
                 transition={transition.panel}
                 className="overflow-hidden"
               >
-                <EventDetail ev={ev} avail={avail} />
+                <EventDetail ev={ev} avail={avail} order={speakerOrder} />
               </motion.div>
             )}
           </AnimatePresence>
@@ -182,7 +185,7 @@ function summaryText(ev: SpeechEvent): string {
   }
 }
 
-function EventBody({ ev, runs, onRetry }: { ev: SpeechEvent; runs: SpeakerRun[] | null; onRetry: () => void }) {
+function EventBody({ ev, runs, order, onRetry }: { ev: SpeechEvent; runs: SpeakerRun[] | null; order: Map<string, number>; onRetry: () => void }) {
   const dur = ev.endedAt - ev.startedAt;
   if (ev.status === "queued" || ev.status === "transcribing") {
     // Skeleton width follows real speech duration: longer events, longer placeholder.
@@ -232,7 +235,7 @@ function EventBody({ ev, runs, onRetry }: { ev: SpeechEvent; runs: SpeakerRun[] 
           <p key={run.segments[0].id} className="selectable text-read text-text [text-wrap:pretty]">
             {i > 0 && (
               <>
-                <SpeakerName speaker={run.speaker} label={run.label} className="text-[12px] font-semibold tracking-[0.01em] text-remote-text" />{" "}
+                <SpeakerName speaker={run.speaker} label={run.label} order={run.speaker ? order.get(run.speaker.id) : undefined} className="text-[12px] font-semibold tracking-[0.01em] text-remote-text" />{" "}
               </>
             )}
             {run.text}
@@ -244,7 +247,7 @@ function EventBody({ ev, runs, onRetry }: { ev: SpeechEvent; runs: SpeakerRun[] 
   return <p className="selectable text-read text-text [text-wrap:pretty]">{eventText(ev)}</p>;
 }
 
-function EventDetail({ ev, avail }: { ev: SpeechEvent; avail: ReturnType<typeof audioAvailability> }) {
+function EventDetail({ ev, avail, order }: { ev: SpeechEvent; avail: ReturnType<typeof audioAvailability>; order: Map<string, number> }) {
   const actions = useEventActions();
   const separated = isSeparated(ev);
   const player = usePlayer();
@@ -266,7 +269,7 @@ function EventDetail({ ev, avail }: { ev: SpeechEvent; avail: ReturnType<typeof 
               <li key={s.id} className="grid grid-cols-[44px_1fr] gap-2">
                 {speakerChange && (
                   <div className="col-start-2 -mb-0.5 pt-1">
-                    <SpeakerName speaker={s.speaker} label={s.speaker?.label ?? sourceLabel(ev)} className="text-[12px] font-semibold tracking-[0.01em] text-remote-text" />
+                    <SpeakerName speaker={s.speaker} label={s.speaker?.label ?? sourceLabel(ev)} order={s.speaker ? order.get(s.speaker.id) : undefined} className="text-[12px] font-semibold tracking-[0.01em] text-remote-text" />
                   </div>
                 )}
                 <button

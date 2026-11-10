@@ -2,6 +2,12 @@
 // Fetches sherpa-onnx's prebuilt static libraries for this host into .sherpa-onnx/lib, which
 // .cargo/config.toml hands to sherpa-onnx-sys as SHERPA_ONNX_LIB_DIR. The archive is pinned by
 // SHA-256 (from the GitHub release's asset digests); a mismatch fails and nothing is extracted.
+//
+// These are the *no-TTS* builds: the full builds statically include espeak-ng (GPL-3.0), which
+// would otherwise end up inside tuldmi-speakers even though nothing calls it. sherpa-onnx-sys
+// still names espeak-ng, piper_phonemize and ucd on the link line unconditionally, so empty
+// archives stand in for them (nothing references their symbols; the link would fail if
+// anything did). Windows archives use the static C runtime (/MT), matching +crt-static.
 // Idempotent: skips the download when .sherpa-onnx/lib was extracted from the same archive.
 //   node scripts/sherpa-libs.mjs
 import { createHash } from "node:crypto";
@@ -13,10 +19,12 @@ import { fileURLToPath } from "node:url";
 // Must match the sherpa-onnx crate version in Cargo.lock.
 const VERSION = "1.13.8";
 const ARCHIVES = {
-  "win32-x64": ["win-x64-static-MT-Release-lib", "56ffcf3c454c1f14f7bc9887286cc8143e7e542dc632804e1c447d5f8d534eaf"],
-  "darwin-arm64": ["osx-arm64-static-lib", "9091bf160dc7fdacedbc906b212badf53c2993f4e5277a0e03998e96c31d60da"],
-  "linux-x64": ["linux-x64-static-lib", "e1fdc5b67530e15741ef897fa5ffff297056f3bf0c6d829a27af9225a4c4b5a6"],
+  "win32-x64": ["win-x64-static-MT-Release-no-tts-lib", "f0aa074ddc39553b30208b53e84c12275d09702911c9faa8d34fa932428e4641"],
+  "darwin-arm64": ["osx-arm64-static-no-tts-lib", "3d7f9b8a496694af13d9802c33b8133231e397bdef302f543d19468765e83136"],
+  "linux-x64": ["linux-x64-static-no-tts-lib", "36f2ebd0b9aa09248ff6461a30dcb7edfe7eecf2deb67dfb0ceb3aaf4906051f"],
 };
+/** Libraries sherpa-onnx-sys always links that only the TTS build has. */
+const TTS_ONLY = ["espeak-ng", "piper_phonemize", "ucd"];
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, ".sherpa-onnx");
@@ -49,5 +57,10 @@ execFileSync("tar", ["-xjf", `${stem}.tar.bz2`], { cwd: out, stdio: "inherit" })
 rmSync(archive);
 renameSync(join(out, stem, "lib"), join(out, "lib"));
 rmSync(join(out, stem), { recursive: true, force: true });
+for (const name of TTS_ONLY) {
+  const file = join(out, "lib", process.platform === "win32" ? `${name}.lib` : `lib${name}.a`);
+  if (existsSync(file)) throw new Error(`${file} exists: this is not a no-TTS build`);
+  writeFileSync(file, "!<arch>\n"); // an empty ar archive
+}
 writeFileSync(marker, `${stem} ${sha256}\n`);
 console.log(`sherpa-onnx libraries: ${join(out, "lib")}`);

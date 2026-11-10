@@ -7,13 +7,19 @@ import { Button } from "../../components/ui/Button";
 import { useToast } from "../../components/ui/Toast";
 import { useBackend } from "../../state/hooks";
 
-/** Hues for telling separated speakers apart at a glance (a dot next to the name). */
+/** Hues for telling separated speakers apart at a glance (a dot next to the name), assigned in
+ *  order of first appearance in the conversation so the first six never share one. */
 const HUES = [168, 250, 30, 310, 95, 205];
 
 function hueFor(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return HUES[h % HUES.length];
+  // FNV-1a with a final mix: ids differing only in their last characters (UUIDv7 rows created
+  // moments apart) still land on different hues.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193);
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x2c1b3c6d);
+  h ^= h >>> 12;
+  return HUES[(h >>> 0) % HUES.length];
 }
 
 /**
@@ -21,7 +27,7 @@ function hueFor(id: string): number {
  * clicking the name opens a small dialog, and the name applies to that speaker everywhere in
  * the conversation. Me and Remote are sources, not people, so they are plain text.
  */
-export function SpeakerName({ speaker, label, className = "" }: { speaker: Speaker | null; label: string; className?: string }) {
+export function SpeakerName({ speaker, label, order, className = "" }: { speaker: Speaker | null; label: string; order?: number; className?: string }) {
   const [open, setOpen] = useState(false);
   if (!speaker || speaker.kind !== "person") return <span className={className}>{label}</span>;
   return (
@@ -35,7 +41,7 @@ export function SpeakerName({ speaker, label, className = "" }: { speaker: Speak
         title={`Rename ${label}`}
         className={`inline-flex items-center gap-1.5 rounded-sm decoration-dotted underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-line ${className}`}
       >
-        <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: `oklch(0.64 0.1 ${hueFor(speaker.id)})` }} aria-hidden />
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: `oklch(0.64 0.1 ${order != null ? HUES[order % HUES.length] : hueFor(speaker.id)})` }} aria-hidden />
         {label}
       </button>
       {open && <RenameDialog speaker={speaker} label={label} onClose={() => setOpen(false)} />}

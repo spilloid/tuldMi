@@ -226,6 +226,13 @@ export function participants(events: SpeechEvent[]): string[] {
   return out;
 }
 
+/** Separated speakers of a conversation, numbered by first appearance (for their colours). */
+export function speakerOrder(events: SpeechEvent[]): Map<string, number> {
+  const order = new Map<string, number>();
+  for (const ev of events) for (const seg of ev.segments) if (seg.speaker && !order.has(seg.speaker.id)) order.set(seg.speaker.id, order.size);
+  return order;
+}
+
 /** "2026-11-09 14:02:11", the timestamp used when copying transcripts. */
 export function stamp(t: number): string {
   const d = new Date(t);

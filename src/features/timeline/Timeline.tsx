@@ -3,7 +3,7 @@ import { ArrowDown, Copy, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SpeechEvent } from "../../lib/ipc/types";
 import type { Conversation } from "../../lib/time";
-import { buildTimeline, clock, dayKey, dayLabel, humanDuration, participants, speakerKeys } from "../../lib/time";
+import { buildTimeline, clock, dayKey, dayLabel, humanDuration, participants, speakerKeys, speakerOrder } from "../../lib/time";
 import { DayIndex } from "./DayIndex";
 import { isTypingTarget, overlayOpen, plain } from "../../lib/keys";
 import { transition, useReducedMotion } from "../../lib/motion";
@@ -379,6 +379,7 @@ function ConversationBlock({
   onRange: (id: string) => void;
 }) {
   const actions = useEventActions();
+  const order = useMemo(() => speakerOrder(c.events), [c.events]);
   const who = participants(c.events);
   const whoText = who.length > 1 ? `${who.slice(0, -1).join(", ")} & ${who[who.length - 1]}` : who.join("");
   const dur = c.endedAt - c.startedAt;
@@ -418,6 +419,7 @@ function ConversationBlock({
               showTime={!prev || clock(prev.startedAt) !== clock(ev.startedAt)}
               selected={selectedId === ev.id}
               inRange={rangeIds.has(ev.id)}
+              speakerOrder={order}
               expanded={expanded.has(ev.id)}
               flash={flashId === ev.id}
               arrived={arrived.has(ev.id)}
