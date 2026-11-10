@@ -1267,13 +1267,13 @@ fn retain(shared: &Shared) -> Vec<Uuid> {
         }
     }
 }
-/// Separated speakers older than this whose segments are all gone are deleted (the age keeps a
-/// speaker the transcription thread just created, and is about to reference, safe).
+/// Separated speakers older than this whose segments are all gone lose their typed name (the age
+/// keeps a speaker the transcription thread just created, and is about to reference, safe).
 const ORPHAN_SPEAKER_AGE_MS: i64 = 86_400_000;
 fn sweep_speakers(shared: &Shared) {
     let cutoff = chrono::Local::now().timestamp_millis().saturating_sub(ORPHAN_SPEAKER_AGE_MS);
     let _gate = shared.persist_gate.lock();
-    if shared.store.delete_orphan_speakers(cutoff).is_err() {
+    if shared.store.forget_orphan_speaker_names(cutoff).is_err() {
         shared.notice("could not remove unused speaker names");
     }
 }

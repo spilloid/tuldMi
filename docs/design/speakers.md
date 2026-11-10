@@ -105,7 +105,9 @@ CREATE INDEX transcript_segments_speaker ON transcript_segments(speaker_id);
 - A segment's `speaker_id` NULL means the event's speaker: Me or Remote.
 - `speakers.embedding` stays NULL. It is never written.
 - `speakers.ordinal` holds the N of "Speaker N" and survives renames.
-- Housekeeping deletes `person` speakers that no segment references (after a day, so a row being written can't be swept).
+- Housekeeping resets the name of a `person` speaker that no segment references any more back to "Speaker N" (after a day, so a row being written can't be swept). The row, with its number and first-shown time, stays, so the number is never reused in that conversation; nothing personal is left in it.
+- The restart lookup counts speakers first shown in the conversation and speakers its surviving events still show.
+- Live and backfill results carry the settings generation they came from, re-checked under the persist gate right before saving.
 - Every re-announcement of a changed event (relabel, rename, backfill) happens under the persist gate, so it can't overtake a deletion.
 - `TranscriptSegment` gains `speaker: Option<Speaker>`.
 - Search hits and MCP results carry the segment speaker's label.
@@ -123,5 +125,5 @@ Segments are labelled with their speaker's name. The ceiling is unchanged: a spe
 
 - **Network:** models download only after the user consents, from pinned Hugging Face URLs with SHA-256 checks. Nothing else touches the network.
 - **Embeddings:** these are voice fingerprints of other people. They exist only in the app's memory, for the current conversation, and are dropped when the conversation ends (checked while idle too, not only when the next event arrives), when the feature is turned off (checked on every loop of the transcription thread), and at quit. A result that arrives after the feature was turned off is discarded. They are never written to disk or logged.
-- **Names** the user types are stored in `speakers.label`. Deleting a conversation's events deletes them, through the orphan cleanup.
+- **Names** the user types are stored in `speakers.label`. Once no remaining speech shows a speaker, its name is reset to "Speaker N" by the daily sweep.
 - **PRIVACY.md and README** stop saying "not identified" and describe exactly this.

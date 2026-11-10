@@ -685,20 +685,28 @@ impl Store {
     /// and first-shown time, so a renamed speaker, or one whose segments were all deleted, never
     /// has its number reused.
     pub fn max_speaker_ordinal(&self, from: i64, to: i64) -> Result<u32> {
+        // Speakers first shown in the conversation, and speakers its events still show (one
+        // first shown in an event since deleted is still counted through its other segments).
         Ok(self.connection.lock().query_row(
-            "SELECT COALESCE(MAX(ordinal), 0) FROM speakers
-             WHERE kind = 'person' AND seen_at >= ?1 AND seen_at <= ?2",
+            "SELECT COALESCE(MAX(ordinal), 0) FROM speakers p
+             WHERE p.kind = 'person' AND (
+                 (p.seen_at >= ?1 AND p.seen_at <= ?2)
+                 OR EXISTS (SELECT 1 FROM transcript_segments s JOIN audio_events e ON e.id = s.event_id
+                            WHERE s.speaker_id = p.id AND e.started_at >= ?1 AND e.started_at <= ?2))",
             [from, to],
             |row| row.get(0),
         )?)
     }
 
-    /// Delete separated speakers created before `created_before` that no segment shows any more
-    /// (their events were deleted). The age guard leaves alone a speaker the transcription
-    /// thread is about to reference.
-    pub fn delete_orphan_speakers(&self, created_before: i64) -> Result<usize> {
+    /// Forget the names of separated speakers created before `created_before` that no segment
+    /// shows any more (their events were deleted): a name the user typed doesn't outlive the
+    /// speech it labelled. The row stays, back to "Speaker N", so its number is never reused in
+    /// that conversation. The age guard leaves alone a speaker being written right now.
+    pub fn forget_orphan_speaker_names(&self, created_before: i64) -> Result<usize> {
         Ok(self.connection.lock().execute(
-            "DELETE FROM speakers WHERE kind = 'person' AND created_at < ?1
+            "UPDATE speakers SET label = 'Speaker ' || ordinal
+             WHERE kind = 'person' AND created_at < ?1 AND ordinal IS NOT NULL
+             AND label != 'Speaker ' || ordinal
              AND NOT EXISTS (SELECT 1 FROM transcript_segments s WHERE s.speaker_id = speakers.id)",
             [created_before],
         )?)

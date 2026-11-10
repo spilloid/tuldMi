@@ -592,3 +592,29 @@ fn a_backfill_save_leaves_events_separated_meanwhile_alone() -> Result<()> {
     assert_eq!(kept, 0);
     Ok(())
 }
+
+#[test]
+fn orphaned_speakers_lose_their_name_but_keep_their_number() -> Result<()> {
+    let (_dir, store) = setup()?;
+    let session = store.start_session(0)?;
+    let t0 = noon();
+    let a = event_at(&store, &session, Source::System, t0, t0 + 1_000)?;
+    let b = event_at(&store, &session, Source::System, t0 + 2_000, t0 + 3_000)?;
+    // Backfilled in A+B: Speaker 2 first shown in A, still shown in B.
+    let two = store.create_person_speaker("Speaker 2", 2, t0)?;
+    store.rename_speaker(two.id, "Dana")?;
+    store.save_transcript_with_speakers(a.id, &[segment("a", Some(two.id))], None, "m", SpeakersState::Done)?;
+    store.save_transcript_with_speakers(b.id, &[segment("b", Some(two.id))], None, "m", SpeakersState::Done)?;
+    store.delete_event(a.id)?;
+    // A is gone, so the conversation now starts at B, after Speaker 2's first-shown time: it
+    // still counts through B's segment.
+    assert_eq!(store.conversation_bounds(t0 + 2_000)?, (t0 + 2_000, t0 + 2_000));
+    assert_eq!(store.max_speaker_ordinal(t0 + 2_000, t0 + 2_000)?, 2);
+    // Once nothing shows Dana, the typed name goes; the number stays reserved.
+    store.delete_event(b.id)?;
+    assert_eq!(store.forget_orphan_speaker_names(i64::MAX)?, 1);
+    let label: String = store.connection.lock().query_row("SELECT label FROM speakers WHERE id = ?1", [two.id.to_string()], |r| r.get(0))?;
+    assert_eq!(label, "Speaker 2");
+    assert_eq!(store.max_speaker_ordinal(t0, t0 + 3_000)?, 2);
+    Ok(())
+}

@@ -105,7 +105,8 @@ Off by default. When you switch it on (Settings → Transcription → Speakers):
   without speech, or midnight), as soon as you switch separation off, or when you quit. After a restart tuldMi
   can't tell that a voice is someone it heard before; it keeps numbering instead.
 - **Names you type are stored** with your transcripts (renaming "Speaker 2" to "Dana" saves
-  "Dana"). They are deleted with the events that use them.
+  "Dana"). Once you delete all the speech a name labelled, the name is erased within a day
+  (the speaker goes back to "Speaker 2").
 - **AI assistants** see speaker names only if you let them read the other side of calls
   (*Include the other side (Remote)*); names are part of Remote.
 - **Separate past recordings** works only on conversations whose audio you kept, and changes only
