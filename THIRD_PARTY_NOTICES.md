@@ -14,11 +14,24 @@ their licenses, so they are listed explicitly.
 - libopus: BSD-3-Clause, https://opus-codec.org
 - SQLite: Public domain, https://sqlite.org
 
-## Rust crates (584)
+Compiled into `tuldmi-speakers` (speaker separation), from sherpa-onnx's prebuilt
+no-TTS static libraries (no espeak-ng or other text-to-speech code):
+
+- sherpa-onnx: Apache-2.0, https://github.com/k2-fsa/sherpa-onnx
+- ONNX Runtime: MIT, https://github.com/microsoft/onnxruntime (and the libraries it
+  bundles, listed in its ThirdPartyNotices.txt)
+- kaldi-native-fbank: Apache-2.0, https://github.com/csukuangfj/kaldi-native-fbank
+- kaldi-decoder: Apache-2.0, https://github.com/k2-fsa/kaldi-decoder
+- OpenFst (via kaldifst): Apache-2.0, https://www.openfst.org
+- ssentencepiece: Apache-2.0, https://github.com/k2-fsa/ssentencepiece
+- KISS FFT: BSD-3-Clause, https://github.com/mborgerding/kissfft
+
+## Rust crates (616)
 
 | Name | Version | License | Repository |
 | --- | --- | --- | --- |
 | adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 | https://github.com/oyvindln/adler2 |
+| aes | 0.8.4 | MIT OR Apache-2.0 | https://github.com/RustCrypto/block-ciphers |
 | aho-corasick | 1.1.5 | Unlicense OR MIT | https://github.com/BurntSushi/aho-corasick |
 | alloc-no-stdlib | 3.0.0 | BSD-3-Clause | https://github.com/dropbox/rust-alloc-no-stdlib |
 | alloc-stdlib | 0.3.0 | BSD-3-Clause | https://github.com/dropbox/rust-alloc-no-stdlib |
@@ -26,6 +39,7 @@ their licenses, so they are listed explicitly.
 | alsa-sys | 0.4.0 | MIT | https://github.com/diwic/alsa-sys |
 | android_system_properties | 0.1.6 | MIT OR Apache-2.0 | https://github.com/nical/android_system_properties |
 | anyhow | 1.0.104 | MIT OR Apache-2.0 | https://github.com/dtolnay/anyhow |
+| arbitrary | 1.5.0 | MIT OR Apache-2.0 | https://github.com/rust-fuzz/arbitrary/ |
 | async-broadcast | 0.7.2 | MIT OR Apache-2.0 | https://github.com/smol-rs/async-broadcast |
 | async-channel | 2.5.0 | Apache-2.0 OR MIT | https://github.com/smol-rs/async-channel |
 | async-executor | 1.14.0 | Apache-2.0 OR MIT | https://github.com/smol-rs/async-executor |
@@ -64,6 +78,9 @@ their licenses, so they are listed explicitly.
 | byteorder | 1.5.0 | Unlicense OR MIT | https://github.com/BurntSushi/byteorder |
 | byteorder-lite | 0.1.0 | Unlicense OR MIT | https://github.com/image-rs/byteorder-lite |
 | bytes | 1.12.1 | MIT | https://github.com/tokio-rs/bytes |
+| bzip2 | 0.4.4 | MIT/Apache-2.0 | https://github.com/alexcrichton/bzip2-rs |
+| bzip2 | 0.5.2 | MIT OR Apache-2.0 | https://github.com/trifectatechfoundation/bzip2-rs |
+| bzip2-sys | 0.1.13+1.0.8 | MIT/Apache-2.0 | https://github.com/alexcrichton/bzip2-rs |
 | cairo-rs | 0.18.5 | MIT | https://github.com/gtk-rs/gtk-rs-core |
 | cairo-sys-rs | 0.18.2 | MIT | https://github.com/gtk-rs/gtk-rs-core |
 | camino | 1.2.6 | MIT OR Apache-2.0 | https://github.com/camino-rs/camino |
@@ -79,10 +96,12 @@ their licenses, so they are listed explicitly.
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 | https://github.com/rust-lang/cfg-if |
 | chacha20 | 0.10.2 | MIT OR Apache-2.0 | https://github.com/RustCrypto/stream-ciphers |
 | chrono | 0.4.45 | MIT OR Apache-2.0 | https://github.com/chronotope/chrono |
+| cipher | 0.4.4 | MIT OR Apache-2.0 | https://github.com/RustCrypto/traits |
 | clang-sys | 1.9.1 | Apache-2.0 | https://github.com/KyleMayes/clang-sys |
 | cmake | 0.1.58 | MIT OR Apache-2.0 | https://github.com/rust-lang/cmake-rs |
 | combine | 4.6.9 | MIT | https://github.com/Marwes/combine |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT | https://github.com/smol-rs/concurrent-queue |
+| constant_time_eq | 0.3.1 | CC0-1.0 OR MIT-0 OR Apache-2.0 | https://github.com/cesarb/constant_time_eq |
 | cookie | 0.18.2 | MIT OR Apache-2.0 | https://github.com/SergioBenitez/cookie-rs |
 | core-foundation | 0.10.1 | MIT OR Apache-2.0 | https://github.com/servo/core-foundation-rs |
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 | https://github.com/servo/core-foundation-rs |
@@ -92,6 +111,8 @@ their licenses, so they are listed explicitly.
 | cpal | 0.18.2 | Apache-2.0 | https://github.com/RustAudio/cpal |
 | cpufeatures | 0.2.17 | MIT OR Apache-2.0 | https://github.com/RustCrypto/utils |
 | cpufeatures | 0.3.1 | MIT OR Apache-2.0 | https://github.com/RustCrypto/utils |
+| crc | 3.4.0 | MIT OR Apache-2.0 | https://github.com/mrhooray/crc-rs |
+| crc-catalog | 2.5.0 | MIT OR Apache-2.0 | https://github.com/akhilles/crc-catalog |
 | crc32fast | 1.5.3 | MIT OR Apache-2.0 | https://github.com/srijs/rust-crc32fast |
 | crossbeam-channel | 0.5.17 | MIT OR Apache-2.0 | https://github.com/crossbeam-rs/crossbeam |
 | crossbeam-utils | 0.8.23 | MIT OR Apache-2.0 | https://github.com/crossbeam-rs/crossbeam |
@@ -104,10 +125,12 @@ their licenses, so they are listed explicitly.
 | darling_macro | 0.24.1 | MIT | https://github.com/TedDriggs/darling |
 | dasp_sample | 0.11.0 | MIT OR Apache-2.0 | https://github.com/rustaudio/sample |
 | dbus | 0.9.12 | Apache-2.0/MIT | https://github.com/diwic/dbus-rs |
+| deflate64 | 0.1.12 | MIT | https://github.com/anatawa12/deflate64-rs |
 | defmt | 1.2.0 | MIT OR Apache-2.0 | https://github.com/knurling-rs/defmt |
 | defmt-macros | 1.2.0 | MIT OR Apache-2.0 | https://github.com/knurling-rs/defmt |
 | defmt-parser | 1.1.0 | MIT OR Apache-2.0 | https://github.com/knurling-rs/defmt |
 | deranged | 0.5.9 | MIT OR Apache-2.0 | https://github.com/jhpratt/deranged |
+| derive_arbitrary | 1.5.0 | MIT OR Apache-2.0 | https://github.com/rust-fuzz/arbitrary |
 | derive_more | 2.1.1 | MIT | https://github.com/JelteF/derive_more |
 | derive_more-impl | 2.1.1 | MIT | https://github.com/JelteF/derive_more |
 | digest | 0.10.7 | MIT OR Apache-2.0 | https://github.com/RustCrypto/traits |
@@ -140,6 +163,7 @@ their licenses, so they are listed explicitly.
 | fastrand | 2.5.0 | Apache-2.0 OR MIT | https://github.com/smol-rs/fastrand |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 | https://github.com/image-rs/fdeflate |
 | field-offset | 0.3.6 | MIT OR Apache-2.0 | https://github.com/Diggsey/rust-field-offset |
+| filetime | 0.2.29 | MIT/Apache-2.0 | https://github.com/alexcrichton/filetime |
 | find-msvc-tools | 0.1.15 | MIT OR Apache-2.0 | https://github.com/rust-lang/cc-rs |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 | https://github.com/rust-lang/flate2-rs |
 | fnv | 1.0.7 | Apache-2.0 / MIT | https://github.com/servo/rust-fnv |
@@ -190,6 +214,7 @@ their licenses, so they are listed explicitly.
 | heck | 0.5.0 | MIT OR Apache-2.0 | https://github.com/withoutboats/heck |
 | hermit-abi | 0.5.3 | MIT OR Apache-2.0 | https://github.com/hermit-os/hermit-rs |
 | hex | 0.4.3 | MIT OR Apache-2.0 | https://github.com/KokaKiwi/rust-hex |
+| hmac | 0.12.1 | MIT OR Apache-2.0 | https://github.com/RustCrypto/MACs |
 | html5ever | 0.39.0 | MIT OR Apache-2.0 | https://github.com/servo/html5ever |
 | http | 1.5.0 | MIT OR Apache-2.0 | https://github.com/hyperium/http |
 | http-body | 1.1.0 | MIT | https://github.com/hyperium/http-body |
@@ -216,6 +241,7 @@ their licenses, so they are listed explicitly.
 | indexmap | 1.9.3 | Apache-2.0 OR MIT | https://github.com/bluss/indexmap |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT | https://github.com/indexmap-rs/indexmap |
 | infer | 0.22.0 | MIT | https://github.com/bojand/infer |
+| inout | 0.1.4 | MIT OR Apache-2.0 | https://github.com/RustCrypto/utils |
 | ipnet | 2.12.2 | MIT OR Apache-2.0 | https://github.com/krisprice/ipnet |
 | is-docker | 0.2.0 | MIT | https://github.com/TheLarkInn/is-docker |
 | is-wsl | 0.4.0 | MIT | https://github.com/TheLarkInn/is-wsl |
@@ -234,6 +260,7 @@ their licenses, so they are listed explicitly.
 | jni-sys | 0.3.1 | MIT OR Apache-2.0 | https://github.com/jni-rs/jni-sys |
 | jni-sys | 0.4.1 | MIT OR Apache-2.0 | https://github.com/jni-rs/jni-sys |
 | jni-sys-macros | 0.4.1 | MIT OR Apache-2.0 | https://github.com/jni-rs/jni-sys |
+| jobserver | 0.1.35 | MIT OR Apache-2.0 | https://github.com/rust-lang/jobserver-rs |
 | js-sys | 0.3.106 | MIT OR Apache-2.0 | https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys |
 | json-patch | 4.2.0 | MIT/Apache-2.0 | https://github.com/idubrov/json-patch |
 | jsonptr | 0.7.1 | MIT OR Apache-2.0 | https://github.com/chanced/jsonptr |
@@ -253,6 +280,8 @@ their licenses, so they are listed explicitly.
 | lock_api | 0.4.14 | MIT OR Apache-2.0 | https://github.com/Amanieu/parking_lot |
 | log | 0.4.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/log |
 | lru-slab | 0.1.3 | MIT OR Apache-2.0 OR Zlib | https://github.com/Ralith/lru-slab |
+| lzma-rs | 0.3.0 | MIT | https://github.com/gendx/lzma-rs |
+| lzma-sys | 0.1.20 | MIT/Apache-2.0 | https://github.com/alexcrichton/xz2-rs |
 | mach2 | 0.6.0 | BSD-2-Clause OR MIT OR Apache-2.0 | https://github.com/JohnTitor/mach2 |
 | markup5ever | 0.39.0 | MIT OR Apache-2.0 | https://github.com/servo/html5ever |
 | matchers | 0.2.0 | MIT | https://github.com/hawkw/matchers |
@@ -315,6 +344,7 @@ their licenses, so they are listed explicitly.
 | parking | 2.2.1 | Apache-2.0 OR MIT | https://github.com/smol-rs/parking |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 | https://github.com/Amanieu/parking_lot |
 | parking_lot_core | 0.9.12 | MIT OR Apache-2.0 | https://github.com/Amanieu/parking_lot |
+| pbkdf2 | 0.12.2 | MIT OR Apache-2.0 | https://github.com/RustCrypto/password-hashes/tree/master/pbkdf2 |
 | percent-encoding | 2.3.2 | MIT OR Apache-2.0 | https://github.com/servo/rust-url/ |
 | phf | 0.13.1 | MIT | https://github.com/rust-phf/rust-phf |
 | phf_codegen | 0.13.1 | MIT | https://github.com/rust-phf/rust-phf |
@@ -399,8 +429,11 @@ their licenses, so they are listed explicitly.
 | serialize-to-javascript | 0.1.2 | MIT OR Apache-2.0 | https://github.com/chippers/serialize-to-javascript |
 | serialize-to-javascript-impl | 0.1.2 | MIT OR Apache-2.0 | https://github.com/chippers/serialize-to-javascript |
 | servo_arc | 0.4.3 | MIT OR Apache-2.0 | https://github.com/servo/stylo |
+| sha1 | 0.10.7 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes |
 | sha2 | 0.10.9 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes |
 | sharded-slab | 0.1.7 | MIT | https://github.com/hawkw/sharded-slab |
+| sherpa-onnx | 1.13.8 | Apache-2.0 | https://github.com/k2-fsa/sherpa-onnx |
+| sherpa-onnx-sys | 1.13.8 | Apache-2.0 | https://github.com/k2-fsa/sherpa-onnx |
 | shlex | 1.3.0 | MIT OR Apache-2.0 | https://github.com/comex/rust-shlex |
 | shlex | 2.0.1 | MIT OR Apache-2.0 | https://github.com/comex/rust-shlex |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 | https://github.com/vorner/signal-hook |
@@ -433,6 +466,7 @@ their licenses, so they are listed explicitly.
 | system-deps | 6.2.2 | MIT OR Apache-2.0 | https://github.com/gdesmott/system-deps |
 | tao | 0.37.2 | Apache-2.0 | https://github.com/tauri-apps/tao |
 | tao-macros | 0.1.4 | MIT OR Apache-2.0 | https://github.com/tauri-apps/tao |
+| tar | 0.4.46 | MIT OR Apache-2.0 | https://github.com/composefs/tar-rs |
 | target-lexicon | 0.12.16 | Apache-2.0 WITH LLVM-exception | https://github.com/bytecodealliance/target-lexicon |
 | tauri | 2.12.5 | Apache-2.0 OR MIT | https://github.com/tauri-apps/tauri |
 | tauri-build | 2.7.4 | Apache-2.0 OR MIT | https://github.com/tauri-apps/tauri |
@@ -492,6 +526,7 @@ their licenses, so they are listed explicitly.
 | unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/dtolnay/unicode-ident |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-segmentation |
 | untrusted | 0.9.0 | ISC | https://github.com/briansmith/untrusted |
+| ureq | 2.12.1 | MIT OR Apache-2.0 | https://github.com/algesten/ureq |
 | url | 2.5.8 | MIT OR Apache-2.0 | https://github.com/servo/rust-url |
 | urlpattern | 0.6.0 | MIT | https://github.com/denoland/rust-urlpattern |
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT | https://github.com/hsivonen/utf8_iter |
@@ -518,6 +553,7 @@ their licenses, so they are listed explicitly.
 | web-time | 1.1.0 | MIT OR Apache-2.0 | https://github.com/daxpedda/web-time |
 | webkit2gtk | 2.0.2 | MIT | https://github.com/tauri-apps/webkit2gtk-rs |
 | webkit2gtk-sys | 2.0.2 | MIT | https://github.com/tauri-apps/webkit2gtk-rs |
+| webpki-roots | 0.26.11 | CDLA-Permissive-2.0 | https://github.com/rustls/webpki-roots |
 | webpki-roots | 1.0.11 | CDLA-Permissive-2.0 | https://github.com/rustls/webpki-roots |
 | webview2-com | 0.39.1 | MIT | https://github.com/wravery/webview2-rs |
 | webview2-com-macros | 0.8.1 | MIT | https://github.com/wravery/webview2-rs |
@@ -584,7 +620,9 @@ their licenses, so they are listed explicitly.
 | x11-dl | 2.21.0 | MIT | https://github.com/AltF02/x11-rs |
 | x11rb | 0.13.2 | MIT OR Apache-2.0 | https://github.com/psychon/x11rb |
 | x11rb-protocol | 0.13.2 | MIT OR Apache-2.0 | https://github.com/psychon/x11rb |
+| xattr | 1.6.1 | MIT OR Apache-2.0 | https://github.com/Stebalien/xattr |
 | xkeysym | 0.2.1 | MIT OR Apache-2.0 OR Zlib | https://github.com/notgull/xkeysym |
+| xz2 | 0.1.7 | MIT/Apache-2.0 | https://github.com/alexcrichton/xz2-rs |
 | yoke | 0.8.4 | Unicode-3.0 | https://github.com/unicode-org/icu4x |
 | yoke-derive | 0.8.4 | Unicode-3.0 | https://github.com/unicode-org/icu4x |
 | zbus | 5.19.0 | MIT | https://github.com/z-galaxy/zbus/ |
@@ -594,11 +632,17 @@ their licenses, so they are listed explicitly.
 | zerofrom | 0.1.8 | Unicode-3.0 | https://github.com/unicode-org/icu4x |
 | zerofrom-derive | 0.1.8 | Unicode-3.0 | https://github.com/unicode-org/icu4x |
 | zeroize | 1.9.1 | Apache-2.0 OR MIT | https://github.com/RustCrypto/utils |
+| zeroize_derive | 1.5.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/utils |
 | zerotrie | 0.2.5 | Unicode-3.0 | https://github.com/unicode-org/icu4x |
 | zerovec | 0.11.9 | Unicode-3.0 | https://github.com/unicode-org/icu4x |
 | zerovec-derive | 0.11.7 | Unicode-3.0 | https://github.com/unicode-org/icu4x |
+| zip | 2.6.1 | MIT | https://github.com/zip-rs/zip2 |
 | zlib-rs | 0.6.8 | Zlib | https://github.com/trifectatechfoundation/zlib-rs |
 | zmij | 1.0.23 | MIT | https://github.com/dtolnay/zmij |
+| zopfli | 0.8.4 | Apache-2.0 | https://github.com/zopfli-rs/zopfli |
+| zstd | 0.13.4 | BSD-3-Clause | https://github.com/gyscos/zstd-rs |
+| zstd-safe | 7.4.0 | BSD-3-Clause | https://github.com/gyscos/zstd-rs |
+| zstd-sys | 2.1.2+zstd.1.5.7 | BSD-3-Clause | https://github.com/gyscos/zstd-rs |
 | zvariant | 5.15.1 | MIT | https://github.com/z-galaxy/zbus/ |
 | zvariant_derive | 5.15.1 | MIT | https://github.com/z-galaxy/zbus/ |
 | zvariant_utils | 4.2.0 | MIT | https://github.com/z-galaxy/zbus/ |
@@ -670,15 +714,15 @@ their licenses, so they are listed explicitly.
 
 | License expression | Total | Rust | npm |
 | --- | --- | --- | --- |
-| MIT OR Apache-2.0 | 262 | 262 | 0 |
-| MIT | 186 | 134 | 52 |
-| Apache-2.0 OR MIT | 54 | 53 | 1 |
+| MIT OR Apache-2.0 | 277 | 277 | 0 |
+| MIT | 189 | 137 | 52 |
+| Apache-2.0 OR MIT | 55 | 54 | 1 |
+| MIT/Apache-2.0 | 25 | 25 | 0 |
 | Zlib OR Apache-2.0 OR MIT | 23 | 23 | 0 |
-| MIT/Apache-2.0 | 20 | 20 | 0 |
 | Unicode-3.0 | 18 | 18 | 0 |
 | Unlicense OR MIT | 10 | 10 | 0 |
-| BSD-3-Clause | 6 | 6 | 0 |
-| Apache-2.0 | 5 | 5 | 0 |
+| BSD-3-Clause | 9 | 9 | 0 |
+| Apache-2.0 | 8 | 8 | 0 |
 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 5 | 5 | 0 |
 | Apache-2.0/MIT | 5 | 5 | 0 |
 | ISC | 5 | 4 | 1 |
@@ -688,6 +732,8 @@ their licenses, so they are listed explicitly.
 | Apache-2.0 OR ISC OR MIT | 2 | 2 | 0 |
 | BSD-3-Clause OR Apache-2.0 | 2 | 2 | 0 |
 | BSD-3-Clause OR MIT OR Apache-2.0 | 2 | 2 | 0 |
+| CC0-1.0 OR MIT-0 OR Apache-2.0 | 2 | 2 | 0 |
+| CDLA-Permissive-2.0 | 2 | 2 | 0 |
 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | 2 | 2 | 0 |
 | MIT OR Zlib OR Apache-2.0 | 2 | 2 | 0 |
 | Unlicense | 2 | 2 | 0 |
@@ -705,22 +751,4 @@ their licenses, so they are listed explicitly.
 | BSD-2-Clause OR MIT OR Apache-2.0 | 1 | 1 | 0 |
 | BSD-3-Clause AND MIT | 1 | 1 | 0 |
 | BSD-3-Clause/MIT | 1 | 1 | 0 |
-| CC0-1.0 OR MIT-0 OR Apache-2.0 | 1 | 1 | 0 |
-| CDLA-Permissive-2.0 | 1 | 1 | 0 |
 | Zlib OR MIT OR Apache-2.0 | 1 | 1 | 0 |
-
-## Copyleft review (2026-10-24)
-
-Every dependency was screened for GPL, LGPL, AGPL, MPL, EPL, CDDL, SSPL, BUSL and commercial
-terms. Result: **no GPL, LGPL-only, AGPL, or unknown licenses.** Two classes were flagged and
-adjudicated:
-
-- **MPL-2.0** — `cssparser`, `cssparser-macros`, `dtoa-short`, `selectors`, `option-ext`, pulled in
-  by Tauri (`tauri-utils` / `dirs`). MPL-2.0 is file-level copyleft: it applies to those crates'
-  own source files, not to tuldMi. tuldMi uses them unmodified; their source is available at
-  crates.io under MPL-2.0 (https://mozilla.org/MPL/2.0/). Any modification to those files would
-  have to be published under MPL-2.0.
-- **`r-efi`** — `MIT OR Apache-2.0 OR LGPL-2.1-or-later`; tuldMi uses it under **MIT**.
-
-The Rust list above is not target-filtered, so it includes crates that are only compiled on
-macOS/Linux. Regenerate with `node scripts/gen-notices.mjs`.

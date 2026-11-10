@@ -17,9 +17,10 @@ try {
     npm ci --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
 
-    # The MCP server ships beside the app (Tauri externalBin, docs/design/mcp.md).
-    node scripts/build-mcp.mjs
-    if ($LASTEXITCODE -ne 0) { throw 'tuldmi-mcp build failed' }
+    # The MCP server and the speaker worker ship beside the app (Tauri externalBin;
+    # docs/design/mcp.md, docs/design/speakers.md).
+    node scripts/build-sidecars.mjs
+    if ($LASTEXITCODE -ne 0) { throw 'sidecar build failed' }
     $tauriArgs = @('tauri', 'build', '--config', 'src-tauri/tauri.bundle.conf.json')
     if ($Sign) {
         # Tauri runs signCommand for the app executable (before it is packed into the
@@ -47,12 +48,17 @@ try {
         Write-Host ("{0}: {1} | {2} | timestamp: {3}" -f (Split-Path $f -Leaf), $sig.Status, $sig.SignerCertificate.Subject, [bool]$sig.TimeStamperCertificate)
         if ($Sign -and ($sig.Status -ne 'Valid' -or -not $sig.TimeStamperCertificate)) { throw "$f is not validly signed and timestamped" }
     }
-    # The MCP sidecar is signed in place before NSIS packs it; check that copy too.
-    $sidecar = Join-Path $repo 'src-tauri\binaries\tuldmi-mcp-x86_64-pc-windows-msvc.exe'
-    if ($Sign) {
-        $sig = Get-AuthenticodeSignature $sidecar
-        Write-Host ("tuldmi-mcp.exe: {0} | timestamp: {1}" -f $sig.Status, [bool]$sig.TimeStamperCertificate)
-        if ($sig.Status -ne 'Valid' -or -not $sig.TimeStamperCertificate) { throw "tuldmi-mcp.exe was not signed (verify the installed copy too)" }
+    # The sidecars are signed in place before NSIS packs them; check those copies too. Each must
+    # run on its own (static C runtime: no Visual C++ redistributable on the user's machine).
+    foreach ($name in @('tuldmi-mcp', 'tuldmi-speakers')) {
+        $sidecar = Join-Path $repo "src-tauri\binaries\$name-x86_64-pc-windows-msvc.exe"
+        $out = & $sidecar --version
+        if ($LASTEXITCODE -ne 0 -or $out -ne "$name $version") { throw "$name --version printed '$out'" }
+        if ($Sign) {
+            $sig = Get-AuthenticodeSignature $sidecar
+            Write-Host ("{0}.exe: {1} | timestamp: {2}" -f $name, $sig.Status, [bool]$sig.TimeStamperCertificate)
+            if ($sig.Status -ne 'Valid' -or -not $sig.TimeStamperCertificate) { throw "$name.exe was not signed (verify the installed copy too)" }
+        }
     }
     $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
     [IO.File]::WriteAllText("$installer.sha256", "$hash  $(Split-Path $installer -Leaf)`n", (New-Object System.Text.UTF8Encoding $false))

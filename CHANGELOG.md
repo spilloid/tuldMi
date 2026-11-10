@@ -2,6 +2,38 @@
 
 All notable changes to tuldMi are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Remote speakers, separated (off by default).** Turn it on in Settings › Transcription ›
+  Speakers and the other side of calls is labelled by voice, Speaker 1, Speaker 2…, within each
+  conversation; when one stretch of speech has two voices, the transcript is split where the voice
+  changes. Click a speaker's name to rename them for that conversation; names show in the
+  timeline, search, copied text and AI assistant results. Speech nobody can be sure about stays
+  "Remote". It runs on your computer in a separate helper (`tuldmi-speakers`, sherpa-onnx with
+  pyannote segmentation 3.0 and NVIDIA TitaNet-small, 46 MB downloaded on request). Voice
+  fingerprints exist only in memory for the current conversation and are never saved.
+  **Separate past recordings** labels earlier conversations whose audio you kept.
+- **Copy what was said.** Shift+click two events to select everything between them, then press
+  Ctrl+C (⌘C) or use the Copy bar; each conversation also has **Copy conversation**. The text is
+  one `[2026-11-09 14:02:11] Speaker: …` line per speaker.
+
+### Changed
+
+- `tuldmi --pause` with no tuldMi running now exits before any window or WebView is created.
+- Windows binaries link the C runtime statically: tuldMi, `tuldmi-mcp` and `tuldmi-speakers` no
+  longer need the Visual C++ redistributable (0.3.0's `tuldmi.exe` needed `MSVCP140.dll` and
+  `tuldmi-mcp.exe` `VCRUNTIME140.dll`).
+- The database moves to schema 3 (segment speakers). Earlier versions refuse to open it, so going
+  back to 0.3.x after running 0.4.0 needs a backup from before the upgrade.
+
+### Fixed
+
+- Upgrading or uninstalling while an AI assistant is running `tuldmi-mcp` no longer fails to
+  replace it: the installer stops `tuldmi-mcp` and `tuldmi-speakers` first.
+- THIRD_PARTY_NOTICES.md now also covers `tuldmi-mcp`'s and `tuldmi-speakers`' dependencies.
+
 ## [0.3.0] — 2026-11-08
 
 ### Added

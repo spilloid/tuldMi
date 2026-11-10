@@ -185,6 +185,10 @@ fn setup(app: &AppHandle) -> Result<(), String> {
     if std::env::args().any(|a| a == PAUSE_ARG) {
         std::process::exit(PAUSE_NOT_RUNNING);
     }
+    // The main window is configured with `create: false` and built here, after the `--pause`
+    // exit above, so asking a tuldMi that isn't running to pause never starts a WebView.
+    let config = app.config().app.windows.iter().find(|w| w.label == "main").cloned().ok_or("main window missing from tauri.conf.json")?;
+    tauri::WebviewWindowBuilder::from_config(app, &config).and_then(|w| w.build()).map_err(|e| e.to_string())?;
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_dir).map_err(|e| format!("cannot create {}: {e}", data_dir.display()))?;
 

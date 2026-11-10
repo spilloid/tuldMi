@@ -48,4 +48,20 @@ The `TranscriptionProvider` trait is the seam for adding it (likely v0.2).
 
 ## Not used
 
-No cloud ASR. No speaker-diarization model in v0.1.0 (mic/system source separation only).
+No cloud ASR.
+
+## Speaker separation (0.4.0, optional)
+
+Downloaded together, only when the user asks (Settings → Transcription → Speakers), from
+commit-pinned Hugging Face URLs, verified by size and SHA-256 (`models::SPEAKER_CATALOG`):
+
+| Model | File | Size | License |
+|---|---|---|---|
+| pyannote segmentation 3.0 (ONNX export by sherpa-onnx) | `pyannote-segmentation-3.0.onnx` | 6.0 MB | MIT (CNRS) |
+| NVIDIA NeMo TitaNet-small (ONNX export by sherpa-onnx) | `nemo-titanet-small.onnx` | 40.3 MB | CC-BY-4.0 |
+
+They run in `tuldmi-speakers` through sherpa-onnx (Apache-2.0) and ONNX Runtime (MIT), never in
+the app process (docs/design/speakers.md). Chosen on 2026-11-10 against two other embedding
+models (3D-Speaker CAM++, WeSpeaker ResNet34) on sherpa-onnx's test clips and two AMI Meeting
+Corpus recordings; TitaNet-small was the only one to get every speaker count right. The AMI
+results through the shipping pipeline are in docs/design/speakers.md.

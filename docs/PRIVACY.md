@@ -11,8 +11,9 @@ exactly what happens to your audio, in plain terms, and what tuldMi does **not**
 - Only **speech** is kept. A voice-activity detector runs on your device and discards silence and
   non-speech before anything is written to disk. (It isn't perfect: loud non-speech sound can
   occasionally be kept, and very quiet speech can be missed.)
-- "Remote" means "whatever came out of your speakers". tuldMi does **not** identify individual
-  remote speakers in v0.1.0.
+- "Remote" means "whatever came out of your speakers". With **speaker separation** switched on
+  (Settings → Transcription → Speakers, off by default), tuldMi labels the voices in it Speaker
+  1, Speaker 2… within each conversation. See [Speaker separation](#speaker-separation).
 
 ## Where it goes
 
@@ -25,16 +26,16 @@ Paths below are for Windows; on macOS the folder is
 |---|---|
 | Transcripts, settings, index | `%APPDATA%\com.spillerstech.tuldmi\tuldmi.db` |
 | Retained speech audio | `%APPDATA%\com.spillerstech.tuldmi\audio\` (Ogg Opus files) |
-| Transcription models | `%APPDATA%\com.spillerstech.tuldmi\models\` |
+| Transcription and speaker models | `%APPDATA%\com.spillerstech.tuldmi\models\` |
 | Logs | `%APPDATA%\com.spillerstech.tuldmi\logs\` — technical events only, never transcript text or audio |
 
 Settings → Privacy & data → *Open data folder* takes you there.
 
 - **No telemetry, analytics, crash reporting, accounts, or cloud processing.** Transcription runs
   locally with whisper.cpp.
-- **The only network request tuldMi makes** is downloading a transcription model, and only when
-  you click *Download*. It goes to Hugging Face (huggingface.co), shows the size first, and the
-  file is verified with SHA-256.
+- **The only network requests tuldMi makes** are model downloads, and only when you click
+  *Download*: a transcription model, and optionally the two speaker-separation models. They go
+  to Hugging Face (huggingface.co), show the size first, and each file is verified with SHA-256.
 - **AI assistants (MCP), off by default.** If you turn on Settings → Privacy & data → *AI
   assistants*, an assistant you connect (Claude, Cursor, Codex, …) can read your transcripts
   through `tuldmi-mcp`, and **it sends what it reads to its AI provider**. tuldMi itself still
@@ -90,3 +91,23 @@ people you're using tuldMi, or pause it.
 - Temporary audio buffers live in process memory only; tuldMi does not write unencrypted temp
   files outside its data folder, but memory is not locked against paging to the system page
   file.
+
+## Speaker separation
+
+Off by default. When you switch it on (Settings → Transcription → Speakers):
+
+- **It runs on your computer**, in a separate helper program (`tuldmi-speakers`) that tuldMi
+  starts and stops. It's given audio only, never text, and has no network access of its own.
+- **Voice fingerprints stay in memory.** To keep one label per person through a conversation,
+  tuldMi computes a numeric "embedding" of each voice it hears. That is biometric information
+  about other people, so it is never written to disk or logged: it lives only in the app's
+  memory, for the current conversation, and is dropped when the conversation ends (3 minutes
+  without speech), when you switch separation off, or when you quit. After a restart tuldMi
+  can't tell that a voice is someone it heard before; it keeps numbering instead.
+- **Names you type are stored** with your transcripts (renaming "Speaker 2" to "Dana" saves
+  "Dana"). They are deleted with the events that use them.
+- **AI assistants** see speaker names only if you let them read the other side of calls
+  (*Include the other side (Remote)*); names are part of Remote.
+- **Separate past recordings** works only on conversations whose audio you kept, and changes only
+  the labels, never the words.
+

@@ -30,6 +30,10 @@ const THREADS: i32 = 2;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--version") {
+        println!("tuldmi-speakers {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let (Some(segmentation), Some(embedding)) = (value("--segmentation"), value("--embedding")) else {
         eprintln!("usage: tuldmi-speakers --segmentation <model.onnx> --embedding <model.onnx>");
