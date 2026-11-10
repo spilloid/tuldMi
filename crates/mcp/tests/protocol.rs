@@ -34,7 +34,7 @@ fn history() -> History {
     std::fs::write(&clip, &audio).unwrap();
     let add = |source, at: i64, text: &str, audio: Option<NewAudio>| {
         let event = store.insert_event(&NewEvent { session_id: session.id, source, started_at: at, ended_at: at + 5_000, audio }).unwrap();
-        store.save_transcript(event.id, &[NewSegment { start_ms: 0, end_ms: 5_000, text: text.into(), confidence: None }], Some("en"), "tiny").unwrap();
+        store.save_transcript(event.id, &[NewSegment { start_ms: 0, end_ms: 5_000, text: text.into(), confidence: None , speaker_id: None}], Some("en"), "tiny").unwrap();
         event.id
     };
     let me = add(Source::Mic, t, "I will send the deck tonight", None);

@@ -11,6 +11,7 @@ pub mod encode;
 pub mod engine;
 pub mod models;
 pub mod segmenter;
+pub mod speakers;
 pub mod storage;
 pub mod transcribe;
 pub mod types;

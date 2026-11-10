@@ -8,3 +8,5 @@ dist/
 /scratch/
 # tuldmi-mcp sidecar, built by scripts/build-mcp.mjs
 src-tauri/binaries/
+# sherpa-onnx prebuilt static libraries, fetched by scripts/sherpa-libs.mjs
+/.sherpa-onnx/

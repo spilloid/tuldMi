@@ -32,7 +32,7 @@ fn event(s: &Store, dir: &std::path::Path, session: &Session, source: Source, at
 fn transcribe(s: &Store, id: uuid::Uuid, text: &str) -> SpeechEvent {
     s.save_transcript(
         id,
-        &[NewSegment { start_ms: 0, end_ms: 1_500, text: text.into(), confidence: Some(0.9) }],
+        &[NewSegment { start_ms: 0, end_ms: 1_500, text: text.into(), confidence: Some(0.9) , speaker_id: None}],
         Some("en"),
         "whisper-base.en",
     )
@@ -85,7 +85,7 @@ fn event_lifecycle_and_listing() {
     assert_eq!(done.model_id.as_deref(), Some("whisper-base.en"));
     assert_eq!(s.get_event(a.id).unwrap().unwrap().segments[0].text, "Let's move the budget review to Thursday.");
 
-    let empty = s.save_transcript(b.id, &[NewSegment { start_ms: 0, end_ms: 10, text: "   ".into(), confidence: None }], None, "m").unwrap();
+    let empty = s.save_transcript(b.id, &[NewSegment { start_ms: 0, end_ms: 10, text: "   ".into(), confidence: None , speaker_id: None}], None, "m").unwrap();
     assert_eq!(empty.status, EventStatus::Empty);
 
     // Re-saving replaces, never duplicates.

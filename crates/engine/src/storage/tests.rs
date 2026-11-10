@@ -125,6 +125,7 @@ fn transcript_failure_rolls_back_segments_fts_and_status() -> Result<()> {
         end_ms: 20,
         text: "original words".into(),
         confidence: None,
+        speaker_id: None,
     };
     let original = store.save_transcript(event.id, &[segment], Some("en"), "model")?;
     store.connection.lock().execute_batch(
@@ -137,12 +138,14 @@ fn transcript_failure_rolls_back_segments_fts_and_status() -> Result<()> {
             end_ms: 10,
             text: "replacement".into(),
             confidence: None,
+            speaker_id: None,
         },
         NewSegment {
             start_ms: 10,
             end_ms: 20,
             text: "reject".into(),
             confidence: None,
+            speaker_id: None,
         },
     ];
     assert!(
@@ -234,12 +237,14 @@ fn search_sanitizes_tokens_and_obeys_event_dates_offsets_and_limits() -> Result<
                     end_ms: 80,
                     text: "budget Thursday".into(),
                     confidence: None,
+                    speaker_id: None,
                 },
                 NewSegment {
                     start_ms: 20,
                     end_ms: 30,
                     text: "other".into(),
                     confidence: None,
+                    speaker_id: None,
                 },
             ],
             None,
@@ -313,6 +318,7 @@ fn deletion_cascades_fts_and_preserves_settings_models_and_speakers() -> Result<
             end_ms: 10,
             text: "words".into(),
             confidence: None,
+            speaker_id: None,
         }],
         None,
         "m",
@@ -414,8 +420,8 @@ fn read_only_store_reads_filters_and_never_writes() -> Result<()> {
         ended_at: 2_100,
         audio: None,
     })?;
-    store.save_transcript(me.id, &[NewSegment { start_ms: 0, end_ms: 100, text: "send the deck".into(), confidence: None }], Some("en"), "tiny")?;
-    store.save_transcript(remote.id, &[NewSegment { start_ms: 0, end_ms: 100, text: "the deck is late".into(), confidence: None }], Some("en"), "tiny")?;
+    store.save_transcript(me.id, &[NewSegment { start_ms: 0, end_ms: 100, text: "send the deck".into(), confidence: None , speaker_id: None}], Some("en"), "tiny")?;
+    store.save_transcript(remote.id, &[NewSegment { start_ms: 0, end_ms: 100, text: "the deck is late".into(), confidence: None , speaker_id: None}], Some("en"), "tiny")?;
 
     let reader = Store::open_read_only(directory.path())?;
     let all = |sources: Vec<Source>, from: Option<i64>| EventFilter { from, to: None, sources, newest_first: true, limit: 10 };
@@ -482,11 +488,11 @@ fn time_ordered_search_ignores_excluded_transcripts() -> Result<()> {
         let session = store.start_session(0)?;
         let a = insert(&store, &session, 1_000, None)?;
         let b = insert(&store, &session, 2_000, None)?;
-        store.save_transcript(a.id, &[NewSegment { start_ms: 0, end_ms: 1, text: "alpha alpha beta".into(), confidence: None }], None, "m")?;
-        store.save_transcript(b.id, &[NewSegment { start_ms: 0, end_ms: 1, text: "alpha beta beta".into(), confidence: None }], None, "m")?;
+        store.save_transcript(a.id, &[NewSegment { start_ms: 0, end_ms: 1, text: "alpha alpha beta".into(), confidence: None , speaker_id: None}], None, "m")?;
+        store.save_transcript(b.id, &[NewSegment { start_ms: 0, end_ms: 1, text: "alpha beta beta".into(), confidence: None , speaker_id: None}], None, "m")?;
         for at in [3_000, 4_000, 5_000] {
             let event = store.insert_event(&NewEvent { session_id: session.id, source: Source::System, started_at: at, ended_at: at + 1, audio: None })?;
-            store.save_transcript(event.id, &[NewSegment { start_ms: 0, end_ms: 1, text: hidden.into(), confidence: None }], None, "m")?;
+            store.save_transcript(event.id, &[NewSegment { start_ms: 0, end_ms: 1, text: hidden.into(), confidence: None , speaker_id: None}], None, "m")?;
         }
         let query = SearchQuery { text: "alpha beta".into(), sources: vec![Source::Mic], from: None, to: None, limit: Some(1) };
         // Compare by time: ids differ between the two databases.

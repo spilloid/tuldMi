@@ -162,8 +162,8 @@ impl EventStatus {
 pub struct Speaker {
     pub id: Uuid,
     pub label: String,
-    /// "self" for the local user, "remote" for the undiarized system-audio speaker,
-    /// "person" for future diarized/named speakers.
+    /// "self" for the local user, "remote" for system audio nobody separated, "person" for a
+    /// remote speaker separated within one conversation (docs/design/speakers.md).
     pub kind: String,
 }
 
@@ -192,6 +192,8 @@ pub struct TranscriptSegment {
     pub text: String,
     /// 0..=1 when the backend reports it.
     pub confidence: Option<f32>,
+    /// A separated remote speaker (kind "person"); None = the event's speaker.
+    pub speaker: Option<Speaker>,
 }
 
 /// One VAD-delimited span of speech from one source. The timeline's unit.
@@ -332,6 +334,8 @@ pub struct Settings {
     pub theme: Theme,
     /// What AI assistants may read through `tuldmi-mcp`. Off by default.
     pub mcp: McpSettings,
+    /// Separate remote speakers (needs the two speaker models). Off by default.
+    pub speakers_enabled: bool,
 }
 
 /// The ceiling on `tuldmi-mcp` (docs/design/mcp.md), re-read by it on every request.
@@ -381,6 +385,7 @@ impl Default for Settings {
             .into(),
             theme: Theme::System,
             mcp: McpSettings::default(),
+            speakers_enabled: false,
         }
     }
 }

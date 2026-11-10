@@ -25,7 +25,7 @@ mod search;
 #[cfg(test)]
 mod tests;
 
-pub const LATEST_SCHEMA: u32 = 2;
+pub const LATEST_SCHEMA: u32 = 3;
 /// Automatic retries for a transcription job before it is marked failed.
 pub const MAX_ATTEMPTS: u32 = 3;
 pub const DEFAULT_SEARCH_LIMIT: u32 = 50;
@@ -60,6 +60,34 @@ pub struct NewSegment {
     pub end_ms: i64,
     pub text: String,
     pub confidence: Option<f32>,
+    /// A separated remote speaker; None = the event's speaker (Me or Remote).
+    pub speaker_id: Option<Uuid>,
+}
+
+/// Whether an event's remote speakers were separated (`audio_events.speakers_state`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeakersState {
+    Done,
+    Failed,
+}
+impl SpeakersState {
+    fn as_str(self) -> &'static str {
+        match self {
+            SpeakersState::Done => "done",
+            SpeakersState::Failed => "failed",
+        }
+    }
+}
+
+/// A system event the backfill can separate: done, audio retained, never separated.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackfillEvent {
+    pub id: Uuid,
+    pub started_at: i64,
+    pub ended_at: i64,
+    pub audio_path: PathBuf,
+    /// (segment id, start ms, end ms), in order.
+    pub segments: Vec<(Uuid, i64, i64)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -126,6 +154,7 @@ impl Store {
         const MIGRATIONS: &[&str] = &[
             include_str!("migrations/0001_initial.sql"),
             include_str!("migrations/0002_asset_index.sql"),
+            include_str!("migrations/0003_segment_speakers.sql"),
         ];
         for (index, migration) in MIGRATIONS.iter().enumerate() {
             let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -380,7 +409,21 @@ impl Store {
         language: Option<&str>,
         model_id: &str,
     ) -> Result<SpeechEvent> {
-        self.finish_job(event_id, segments, language, model_id, None)
+        Ok(self.finish_job(event_id, segments, language, model_id, None, None)?.0)
+    }
+
+    /// `save_transcript` for a system event whose speakers were separated (or failed to be):
+    /// segments carry their `speaker_id`s and the event records `state`. Also returns the new
+    /// segment ids, in the order given.
+    pub fn save_transcript_with_speakers(
+        &self,
+        event_id: Uuid,
+        segments: &[NewSegment],
+        language: Option<&str>,
+        model_id: &str,
+        state: SpeakersState,
+    ) -> Result<(SpeechEvent, Vec<Uuid>)> {
+        self.finish_job(event_id, segments, language, model_id, None, Some(state))
     }
 
     /// The transcriber's energy gate judged the audio too quiet and skipped inference: the job
@@ -394,7 +437,7 @@ impl Store {
         language: Option<&str>,
         model_id: &str,
     ) -> Result<SpeechEvent> {
-        self.finish_job(event_id, &[], language, model_id, Some(QUIET_AUDIO_NOTE))
+        Ok(self.finish_job(event_id, &[], language, model_id, Some(QUIET_AUDIO_NOTE), None)?.0)
     }
 
     fn finish_job(
@@ -404,25 +447,30 @@ impl Store {
         language: Option<&str>,
         model_id: &str,
         note: Option<&str>,
-    ) -> Result<SpeechEvent> {
+        speakers: Option<SpeakersState>,
+    ) -> Result<(SpeechEvent, Vec<Uuid>)> {
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let id = event_id.to_string();
         tx.execute("DELETE FROM transcript_segments WHERE event_id = ?1", [&id])?;
+        let mut ids = Vec::with_capacity(segments.len());
         {
             let mut insert = tx.prepare_cached(
-                "INSERT INTO transcript_segments (id, event_id, start_ms, end_ms, text, confidence)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO transcript_segments (id, event_id, start_ms, end_ms, text, confidence, speaker_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
             for segment in segments {
+                let segment_id = Uuid::now_v7();
                 insert.execute(params![
-                    Uuid::now_v7().to_string(),
+                    segment_id.to_string(),
                     id,
                     segment.start_ms,
                     segment.end_ms,
                     segment.text,
-                    segment.confidence
+                    segment.confidence,
+                    segment.speaker_id.map(|s| s.to_string()),
                 ])?;
+                ids.push(segment_id);
             }
         }
         let status = if segments.iter().any(|s| !s.text.trim().is_empty()) {
@@ -431,9 +479,9 @@ impl Store {
             "empty"
         };
         tx.execute(
-            "UPDATE audio_events SET status = ?2, language = ?3, model_id = ?4, error = ?5
-             WHERE id = ?1",
-            params![id, status, language, model_id, note],
+            "UPDATE audio_events SET status = ?2, language = ?3, model_id = ?4, error = ?5,
+             speakers_state = ?6 WHERE id = ?1",
+            params![id, status, language, model_id, note, speakers.map(SpeakersState::as_str)],
         )?;
         tx.execute(
             "UPDATE transcription_jobs SET state = 'done', last_error = NULL, updated_at = ?2
@@ -442,7 +490,235 @@ impl Store {
         )?;
         let event = read::required_event(&tx, &self.data_dir, event_id)?;
         tx.commit()?;
-        Ok(event)
+        Ok((event, ids))
+    }
+
+    // ---- remote speakers (docs/design/speakers.md) ------------------------------------------
+
+    /// A new separated remote speaker ("Speaker N"). Never carries an embedding.
+    pub fn create_person_speaker(&self, label: &str) -> Result<Speaker> {
+        let speaker = Speaker { id: Uuid::now_v7(), label: label.into(), kind: "person".into() };
+        self.connection.lock().execute(
+            "INSERT INTO speakers (id, label, kind, created_at) VALUES (?1, ?2, 'person', ?3)",
+            params![speaker.id.to_string(), speaker.label, now_ms()],
+        )?;
+        Ok(speaker)
+    }
+
+    /// Give existing segments to a speaker (None = back to the event's speaker). Returns the
+    /// events touched, for the caller to announce. Segments that no longer exist are skipped.
+    pub fn set_segment_speakers(&self, segments: &[(Uuid, Option<Uuid>)]) -> Result<Vec<Uuid>> {
+        let mut connection = self.connection.lock();
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut events = Vec::new();
+        {
+            let mut update = tx.prepare_cached(
+                "UPDATE transcript_segments SET speaker_id = ?2 WHERE id = ?1 RETURNING event_id",
+            )?;
+            for (segment, speaker) in segments {
+                let event = update
+                    .query_row(params![segment.to_string(), speaker.map(|s| s.to_string())], |row| {
+                        read::uuid(row, 0)
+                    })
+                    .optional()?;
+                if let Some(event) = event
+                    && !events.contains(&event)
+                {
+                    events.push(event);
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(events)
+    }
+
+    /// Record the separation outcome for an event whose segments already exist (backfill).
+    pub fn set_speakers_state(&self, event_id: Uuid, state: SpeakersState) -> Result<()> {
+        self.connection.lock().execute(
+            "UPDATE audio_events SET speakers_state = ?2 WHERE id = ?1",
+            params![event_id.to_string(), state.as_str()],
+        )?;
+        Ok(())
+    }
+
+    /// Rename a separated speaker. Only `person` speakers can be renamed: Me and Remote are
+    /// sources, not people. Returns the events that show the speaker, for announcing.
+    pub fn rename_speaker(&self, id: Uuid, label: &str) -> Result<Vec<Uuid>> {
+        let label = label.trim();
+        if label.is_empty() || label.chars().count() > 80 || label.chars().any(char::is_control) {
+            return Err(Error::Other("speaker names must be 1 to 80 characters".into()));
+        }
+        let mut connection = self.connection.lock();
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute(
+            "UPDATE speakers SET label = ?2 WHERE id = ?1 AND kind = 'person'",
+            params![id.to_string(), label],
+        )?;
+        if changed == 0 {
+            return Err(Error::Other("only separated speakers can be renamed".into()));
+        }
+        let events = {
+            let mut statement =
+                tx.prepare("SELECT DISTINCT event_id FROM transcript_segments WHERE speaker_id = ?1")?;
+            statement
+                .query_map([id.to_string()], |row| read::uuid(row, 0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        tx.commit()?;
+        Ok(events)
+    }
+
+    /// Start of the conversation containing an event that starts at `at`: walk back through
+    /// earlier events (either source) while each gap is at most `gap_ms` (the timeline's rule).
+    pub fn conversation_start(&self, at: i64, gap_ms: i64) -> Result<i64> {
+        let connection = self.connection.lock();
+        let mut statement = connection.prepare_cached(
+            "SELECT started_at, ended_at FROM audio_events WHERE started_at < ?1
+             ORDER BY started_at DESC",
+        )?;
+        let mut rows = statement.query([at])?;
+        let mut start = at;
+        while let Some(row) = rows.next()? {
+            let (started, ended): (i64, i64) = (row.get(0)?, row.get(1)?);
+            if start - ended > gap_ms {
+                break;
+            }
+            start = start.min(started);
+        }
+        Ok(start)
+    }
+
+    /// How many separated speakers events starting at or after `from` already show (to
+    /// continue numbering in a conversation after a restart).
+    pub fn person_speakers_since(&self, from: i64) -> Result<u32> {
+        Ok(self.connection.lock().query_row(
+            "SELECT COUNT(DISTINCT s.speaker_id) FROM transcript_segments s
+             JOIN audio_events e ON e.id = s.event_id
+             JOIN speakers p ON p.id = s.speaker_id AND p.kind = 'person'
+             WHERE e.started_at >= ?1",
+            [from],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Delete separated speakers that no segment shows any more (their events were deleted).
+    pub fn delete_orphan_speakers(&self) -> Result<usize> {
+        Ok(self.connection.lock().execute(
+            "DELETE FROM speakers WHERE kind = 'person'
+             AND NOT EXISTS (SELECT 1 FROM transcript_segments s WHERE s.speaker_id = speakers.id)",
+            [],
+        )?)
+    }
+
+    /// The earliest conversation starting after `after` that the backfill can separate, with
+    /// the start time of its last event (pass it back as `after` to continue). A conversation
+    /// qualifies when every system event in it is done, has its audio, and was never separated
+    /// (`empty` ones are ignored); any other system event skips the whole conversation, since
+    /// voices can only be linked across a conversation processed whole and in order.
+    pub fn next_backfill_conversation(
+        &self,
+        after: i64,
+        gap_ms: i64,
+    ) -> Result<Option<(i64, Vec<BackfillEvent>)>> {
+        struct Row {
+            id: Uuid,
+            system: bool,
+            started: i64,
+            ended: i64,
+            status: String,
+            separated: bool,
+            audio: Option<PathBuf>,
+        }
+        let connection = self.connection.lock();
+        let found = {
+            let mut statement = connection.prepare_cached(
+                "SELECT e.id, e.source, e.started_at, e.ended_at, e.status, e.speakers_state,
+                        a.rel_path, a.expired_at
+                 FROM audio_events e LEFT JOIN audio_assets a ON a.id = e.asset_id
+                 WHERE e.started_at > ?1 ORDER BY e.started_at, e.id",
+            )?;
+            let mut rows = statement.query([after])?;
+            let mut group: Vec<Row> = Vec::new();
+            let mut reach = i64::MIN;
+            let mut found = None;
+            loop {
+                let next = match rows.next()? {
+                    Some(row) => {
+                        let expired = row.get::<_, Option<i64>>(7)?.is_some();
+                        let path: Option<String> = row.get(6)?;
+                        Some(Row {
+                            id: read::uuid(row, 0)?,
+                            system: read::source(row, 1)? == Source::System,
+                            started: row.get(2)?,
+                            ended: row.get(3)?,
+                            status: row.get(4)?,
+                            separated: row.get::<_, Option<String>>(5)?.is_some(),
+                            audio: path.filter(|_| !expired).and_then(|p| paths::stored(&self.data_dir, &p)),
+                        })
+                    }
+                    None => None,
+                };
+                let boundary = match &next {
+                    None => true,
+                    Some(row) => !group.is_empty() && row.started - reach > gap_ms,
+                };
+                if boundary && !group.is_empty() {
+                    let mut events = Vec::new();
+                    let mut usable = true;
+                    for row in group.iter().filter(|r| r.system) {
+                        match (row.status.as_str(), row.separated, &row.audio) {
+                            ("done", false, Some(audio)) => events.push(BackfillEvent {
+                                id: row.id,
+                                started_at: row.started,
+                                ended_at: row.ended,
+                                audio_path: audio.clone(),
+                                segments: Vec::new(),
+                            }),
+                            ("empty", _, _) => {}
+                            _ => usable = false,
+                        }
+                    }
+                    if usable && !events.is_empty() {
+                        let resume = group.last().map_or(after, |r| r.started);
+                        found = Some((resume, events));
+                        break;
+                    }
+                    group.clear();
+                }
+                match next {
+                    Some(row) => {
+                        reach = if group.is_empty() { row.ended } else { reach.max(row.ended) };
+                        group.push(row);
+                    }
+                    None => break,
+                }
+            }
+            found
+        };
+        let Some((resume, mut events)) = found else {
+            return Ok(None);
+        };
+        let mut segments = connection.prepare_cached(
+            "SELECT id, start_ms, end_ms FROM transcript_segments WHERE event_id = ?1
+             ORDER BY start_ms, seq",
+        )?;
+        for event in &mut events {
+            event.segments = segments
+                .query_map([event.id.to_string()], |row| Ok((read::uuid(row, 0)?, row.get(1)?, row.get(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+        }
+        Ok(Some((resume, events)))
+    }
+
+    /// How many system events the backfill could still separate (for Settings).
+    pub fn backfill_candidates(&self) -> Result<u32> {
+        Ok(self.connection.lock().query_row(
+            "SELECT COUNT(*) FROM audio_events e JOIN audio_assets a ON a.id = e.asset_id
+             WHERE e.source = 'system' AND e.status = 'done' AND e.speakers_state IS NULL
+             AND a.rel_path IS NOT NULL AND a.expired_at IS NULL",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     /// Deletes the event, its segments, job, and asset row. Returns the audio path to unlink.

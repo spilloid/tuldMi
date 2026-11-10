@@ -224,7 +224,7 @@ fn export_writes_markdown_and_json() {
         .insert_event(&tuldmi_engine::storage::NewEvent { session_id: sess.id, source: Source::System, started_at: 1_700_000_001_000, ended_at: 1_700_000_003_000, audio: None })
         .unwrap();
     store
-        .save_transcript(ev.id, &[tuldmi_engine::storage::NewSegment { start_ms: 0, end_ms: 1_000, text: "Quarterly numbers look good.".into(), confidence: None }], Some("en"), "m")
+        .save_transcript(ev.id, &[tuldmi_engine::storage::NewSegment { start_ms: 0, end_ms: 1_000, text: "Quarterly numbers look good.".into(), confidence: None , speaker_id: None}], Some("en"), "m")
         .unwrap();
     let out = dir.path().join("exports");
     let md = engine.export(ExportFormat::Markdown, None, None, &out).unwrap();
