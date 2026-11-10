@@ -92,6 +92,13 @@ people you're using tuldMi, or pause it.
   files outside its data folder, but memory is not locked against paging to the system page
   file.
 
+## Music detection
+
+On by default (Settings → Transcription → *Skip music*). A small sound classifier that ships with
+tuldMi (CED-tiny, run by `tuldmi-speakers`) scores each stretch of audio on your computer; music
+without speech is kept as a collapsed Music row and not transcribed. Nothing is downloaded or
+sent anywhere, and the audio itself is kept or deleted exactly as your retention setting says.
+
 ## Speaker separation
 
 Off by default. When you switch it on (Settings → Transcription → Speakers):

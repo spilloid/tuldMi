@@ -1,9 +1,10 @@
 import * as CM from "@radix-ui/react-context-menu";
 import { AnimatePresence, motion } from "motion/react";
-import { AlertCircle, AudioLines, Clock3, Copy, FileClock, Pause, Play, RotateCcw, Trash2, VolumeX } from "lucide-react";
+import { AlertCircle, AudioLines, Clock3, Copy, FileClock, Music, Pause, Play, RotateCcw, Trash2, VolumeX } from "lucide-react";
 import { memo } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import type { SpeechEvent } from "../../lib/ipc/types";
+import { MUSIC_NOTE } from "../../lib/ipc/types";
 import { clock, clockSeconds, eventText, humanDuration, isSeparated, mediaTime, sourceLabel, speakerRuns } from "../../lib/time";
 import type { SpeakerRun } from "../../lib/time";
 import { SpeakerName } from "./SpeakerName";
@@ -147,6 +148,11 @@ export const EventRow = memo(function EventRow({ ev, showLabel, showTime, select
           <MenuItem icon={<RotateCcw size={14} />} onSelect={() => void actions.retry(ev)} disabled={ev.status !== "failed"}>
             Retry transcription
           </MenuItem>
+          {isMusic(ev) && (
+            <MenuItem icon={<FileClock size={14} />} onSelect={() => void actions.transcribeAnyway(ev)} disabled={!ev.audio}>
+              Transcribe anyway
+            </MenuItem>
+          )}
           <div className="tm-menu-sep" />
           <MenuItem icon={<VolumeX size={14} />} onSelect={() => void actions.deleteAudio(ev)} disabled={!ev.audio} danger>
             Delete audio…
@@ -179,7 +185,7 @@ function summaryText(ev: SpeechEvent): string {
     case "failed":
       return "transcription failed";
     case "empty":
-      return "no words recognized";
+      return isMusic(ev) ? "music, not transcribed" : "no words recognized";
     default:
       return eventText(ev);
   }
@@ -225,6 +231,7 @@ function EventBody({ ev, runs, order, onRetry }: { ev: SpeechEvent; runs: Speake
     if (isQuiet(ev)) {
       return <p className="py-0.5 text-base italic text-faint">Too quiet to transcribe · {humanDuration(dur)}</p>;
     }
+    if (isMusic(ev)) return <MusicBody ev={ev} />;
     return <p className="py-0.5 text-base italic text-faint">No words recognized · {humanDuration(dur)}</p>;
   }
   // Separated speakers: one paragraph per speaker; the first one's name is the row label.
@@ -322,6 +329,32 @@ function EventDetail({ ev, avail, order }: { ev: SpeechEvent; avail: ReturnType<
           {ev.modelId && <span className="max-[1100px]:hidden">{ev.modelId}</span>}
         </span>
       </div>
+    </div>
+  );
+}
+
+/** Judged music by the sound classifier: kept collapsed, not transcribed. */
+export function isMusic(ev: SpeechEvent): boolean {
+  return ev.status === "empty" && ev.error === MUSIC_NOTE;
+}
+
+/** The collapsed Music row: what it is, how long, and a way out if it's wrong. */
+function MusicBody({ ev }: { ev: SpeechEvent }) {
+  const actions = useEventActions();
+  return (
+    <div className="flex items-center gap-2 py-0.5 text-base text-faint">
+      <Music size={14} aria-hidden />
+      <span className="italic">Music · {humanDuration(ev.endedAt - ev.startedAt)}</span>
+      {ev.audio && (
+        <button
+          type="button"
+          onClick={() => void actions.transcribeAnyway(ev)}
+          title="If this was speech, transcribe it"
+          className="ml-1 rounded px-1.5 text-sm font-medium text-accent-text hover:bg-hover"
+        >
+          Transcribe anyway
+        </button>
+      )}
     </div>
   );
 }

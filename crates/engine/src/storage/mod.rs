@@ -31,6 +31,10 @@ pub const MAX_ATTEMPTS: u32 = 3;
 pub const DEFAULT_SEARCH_LIMIT: u32 = 50;
 /// Event note for audio the transcriber's energy gate skipped (see `save_untranscribed_quiet`).
 pub const QUIET_AUDIO_NOTE: &str = "Too quiet to transcribe; audio kept";
+/// Event note for audio the sound classifier judged music, not speech (`save_music`). Like quiet
+/// audio, it was never transcribed: delete-after-transcription keeps it for
+/// `QUIET_AUDIO_GRACE_MS`, so it can be played, or transcribed anyway if it was wrong.
+pub const MUSIC_NOTE: &str = "Music; audio kept";
 /// How long delete-after-transcription keeps audio the energy gate skipped, so it can be
 /// played or retried before it expires.
 pub const QUIET_AUDIO_GRACE_MS: i64 = 86_400_000;
@@ -96,6 +100,8 @@ pub struct Job {
     pub source: Source,
     pub started_at: i64,
     pub ended_at: i64,
+    /// The user asked to transcribe this event even though it was judged music.
+    pub transcribe_anyway: bool,
     pub attempts: u32,
     /// Absolute path of the event's audio. None if the audio is gone (job will fail).
     pub audio_path: Option<PathBuf>,
@@ -441,6 +447,43 @@ impl Store {
         model_id: &str,
     ) -> Result<SpeechEvent> {
         Ok(self.finish_job(event_id, &[], language, model_id, Some(QUIET_AUDIO_NOTE), None)?.0)
+    }
+
+    /// The sound classifier judged the event music: the job is done and the event `empty`, with
+    /// `MUSIC_NOTE` as its note; nothing was transcribed. Retention treats it like quiet audio.
+    pub fn save_music(&self, event_id: Uuid, model_id: &str) -> Result<SpeechEvent> {
+        Ok(self.finish_job(event_id, &[], None, model_id, Some(MUSIC_NOTE), None)?.0)
+    }
+
+    /// "Transcribe anyway" on an event judged music: requeue it and skip the music check from
+    /// now on. False if it isn't a music event with its audio still kept.
+    pub fn transcribe_anyway(&self, event_id: Uuid) -> Result<bool> {
+        let mut connection = self.connection.lock();
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let id = event_id.to_string();
+        let eligible: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM audio_events e JOIN audio_assets a ON a.id = e.asset_id
+             WHERE e.id = ?1 AND e.status = 'empty' AND e.error IS ?2
+             AND a.expired_at IS NULL AND a.rel_path IS NOT NULL)",
+            params![id, MUSIC_NOTE],
+            |row| row.get(0),
+        )?;
+        let eligible = eligible && read::live_path(&tx, &self.data_dir, event_id)?.is_some();
+        if eligible {
+            tx.execute(
+                "INSERT INTO transcription_jobs (event_id, state, attempts, enqueued_at, updated_at)
+                 VALUES (?1, 'queued', 0, ?2, ?2) ON CONFLICT(event_id) DO UPDATE SET
+                 state = 'queued', attempts = 0, last_error = NULL,
+                 enqueued_at = excluded.enqueued_at, updated_at = excluded.updated_at",
+                params![id, now_ms()],
+            )?;
+            tx.execute(
+                "UPDATE audio_events SET status = 'queued', error = NULL, transcribe_anyway = 1 WHERE id = ?1",
+                [&id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(eligible)
     }
 
     fn finish_job(
@@ -866,7 +909,7 @@ impl Store {
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let next = tx
             .query_row(
-                "SELECT j.event_id, j.attempts, e.source, e.started_at, e.ended_at
+                "SELECT j.event_id, j.attempts, e.source, e.started_at, e.ended_at, e.transcribe_anyway
                  FROM transcription_jobs j JOIN audio_events e ON e.id = j.event_id
                  WHERE j.state = 'queued' ORDER BY j.enqueued_at, j.event_id LIMIT 1",
                 [],
@@ -877,11 +920,12 @@ impl Store {
                         read::source(row, 2)?,
                         row.get::<_, i64>(3)?,
                         row.get::<_, i64>(4)?,
+                        row.get::<_, bool>(5)?,
                     ))
                 },
             )
             .optional()?;
-        let job = if let Some((event_id, attempts, source, started_at, ended_at)) = next {
+        let job = if let Some((event_id, attempts, source, started_at, ended_at, transcribe_anyway)) = next {
             tx.execute(
                 "UPDATE transcription_jobs SET state = 'running', attempts = attempts + 1,
                  updated_at = ?2 WHERE event_id = ?1",
@@ -896,6 +940,7 @@ impl Store {
                 source,
                 started_at,
                 ended_at,
+                transcribe_anyway,
                 attempts: attempts + 1,
                 audio_path: read::live_path(&tx, &self.data_dir, event_id)?,
             })
@@ -1041,18 +1086,19 @@ impl Store {
         cutoff: i64,
         quiet_cutoff: i64,
     ) -> Result<Vec<(Uuid, Option<PathBuf>)>> {
-        // ?1 cutoff, ?2 quiet cutoff, ?3 quiet note. Internal SQL; values are bound.
+        // ?1 cutoff, ?2 quiet cutoff, ?3 quiet note, ?5 music note (music gets the quiet grace).
+        // Internal SQL; values are bound.
         const ELIGIBLE: &str = "FROM audio_assets a JOIN audio_events e ON e.asset_id = a.id
              WHERE a.rel_path IS NOT NULL AND a.expired_at IS NULL
              AND e.status IN ('done', 'empty')
-             AND e.ended_at < CASE WHEN e.status = 'empty' AND e.error IS ?3 THEN ?2 ELSE ?1 END";
+             AND e.ended_at < CASE WHEN e.status = 'empty' AND (e.error IS ?3 OR e.error IS ?5) THEN ?2 ELSE ?1 END";
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let expired = {
             // Capture ids and paths before clearing the references in the same transaction.
             let mut select = tx.prepare(&format!("SELECT e.id, a.rel_path {ELIGIBLE}"))?;
             let expired = select
-                .query_map(params![cutoff, quiet_cutoff, QUIET_AUDIO_NOTE], |row| {
+                .query_map(params![cutoff, quiet_cutoff, QUIET_AUDIO_NOTE, None::<i64>, MUSIC_NOTE], |row| {
                     Ok((
                         read::uuid(row, 0)?,
                         paths::stored(&self.data_dir, &row.get::<_, String>(1)?),
@@ -1064,7 +1110,7 @@ impl Store {
                     "UPDATE audio_assets SET rel_path = NULL, expired_at = ?4
                      WHERE id IN (SELECT a.id {ELIGIBLE})"
                 ),
-                params![cutoff, quiet_cutoff, QUIET_AUDIO_NOTE, now_ms()],
+                params![cutoff, quiet_cutoff, QUIET_AUDIO_NOTE, now_ms(), MUSIC_NOTE],
             )?;
             expired
         };

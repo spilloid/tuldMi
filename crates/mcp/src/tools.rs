@@ -394,6 +394,8 @@ fn event_json(event: &SpeechEvent, max_chars: usize) -> Value {
         "status": event.status.as_str(),
         "language": event.language,
         "speakers": speakers(event),
+        // Judged music by tuldMi's sound classifier: kept, but not transcribed.
+        "music": event.error.as_deref() == Some(tuldmi_engine::storage::MUSIC_NOTE),
         "text": text,
         "truncated": truncated,
         "has_audio": event.audio.is_some(),
@@ -402,7 +404,8 @@ fn event_json(event: &SpeechEvent, max_chars: usize) -> Value {
 
 fn event_line(event: &SpeechEvent) -> String {
     let (text, truncated) = cut(transcript(event), 200);
-    let text = if text.is_empty() { format!("({})", event.status.as_str()) } else { text };
+    let music = event.error.as_deref() == Some(tuldmi_engine::storage::MUSIC_NOTE);
+    let text = if text.is_empty() { format!("({})", if music { "music" } else { event.status.as_str() }) } else { text };
     format!("- {} [{}] {}{}", time_text(event.started_at), source_name(event.source), text, if truncated { "…" } else { "" })
 }
 

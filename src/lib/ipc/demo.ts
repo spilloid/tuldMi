@@ -10,7 +10,7 @@ import {
   makeEvent,
 } from "./demoData";
 import { searchEvents } from "./demoSearch";
-import { DEFAULT_SETTINGS } from "./types";
+import { DEFAULT_SETTINGS, MUSIC_NOTE } from "./types";
 import type {
   CaptureStatus,
   DeviceInfo,
@@ -359,6 +359,14 @@ export class DemoBackend implements Backend {
       if (!ev.segments.some((s) => s.speaker?.id === id && s.speaker.kind === "person")) continue;
       this.upsert({ ...ev, segments: ev.segments.map((s) => (s.speaker?.id === id ? { ...s, speaker: { ...s.speaker, label: name } } : s)) });
     }
+  }
+
+  async transcribeAnyway(id: string): Promise<boolean> {
+    const ev = this.events.find((e) => e.id === id);
+    if (!ev || ev.error !== MUSIC_NOTE) return false;
+    // Demo: there is no audio to transcribe; say so instead of inventing lyrics.
+    this.upsert({ ...ev, status: "empty", error: null });
+    return true;
   }
 
   async separatePastRecordings(): Promise<number> {

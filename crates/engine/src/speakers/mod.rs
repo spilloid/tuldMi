@@ -3,6 +3,7 @@
 //! conversation (in memory only), and `assign` gives transcript segments to speakers.
 
 pub mod assign;
+pub mod music;
 pub mod protocol;
 pub mod tracker;
 pub mod worker;

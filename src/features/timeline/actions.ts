@@ -34,6 +34,14 @@ export function useEventActions() {
     copyWithTimestamp: (ev: SpeechEvent) => copy(textWithTimestamp(ev), "Text with timestamp"),
     /** Several events (a range or a whole conversation) as timestamped transcript lines. */
     copyTranscript: (events: SpeechEvent[], what: string) => copy(transcriptText(events), what),
+    transcribeAnyway: async (ev: SpeechEvent) => {
+      try {
+        const ok = await backend.transcribeAnyway(ev.id);
+        if (!ok) toast.show({ level: "warning", message: "This recording's audio is gone, so it can't be transcribed." });
+      } catch (e) {
+        toast.show({ level: "error", title: "Couldn't transcribe", message: errorMessage(e) });
+      }
+    },
     retry: async (ev: SpeechEvent) => {
       try {
         const ok = await backend.retryEvent(ev.id);

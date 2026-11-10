@@ -91,9 +91,9 @@ impl Separation {
             }
         }
         if !shared.settings.lock().speakers_enabled {
+            // The worker itself stays if music rejection still needs it; `check` reconfigures it.
             self.live.reset();
             self.number_from = None;
-            self.worker = None;
             if self.backfill.take().is_some() | shared.backfill_requested.swap(false, Ordering::AcqRel) {
                 set_backfill(shared, None);
             }
@@ -112,10 +112,6 @@ impl Separation {
         if state != SeparationState::Ready {
             self.live.reset();
             self.number_from = None;
-            if state != SeparationState::Unavailable {
-                // Keep a given-up worker so it stays given up for the session.
-                self.worker = None;
-            }
             if self.backfill.take().is_some() | shared.backfill_requested.swap(false, Ordering::AcqRel) {
                 set_backfill(shared, None);
             }
@@ -124,34 +120,68 @@ impl Separation {
         state == SeparationState::Ready
     }
 
+    /// Keep the worker configured for what's wanted now: speaker separation (switched on and
+    /// both models installed) and music rejection (switched on and the bundled classifier
+    /// present). A change restarts it; with neither, there's no worker. Returns the speaker
+    /// separation state.
     fn check(&mut self, shared: &Shared) -> SeparationState {
-        if !shared.settings.lock().speakers_enabled {
-            return SeparationState::Off;
-        }
-        let Some(program) = shared.config.speaker_worker.clone().filter(|p| p.is_file()) else {
-            return SeparationState::Unavailable;
+        let (speakers_on, music_on) = {
+            let settings = shared.settings.lock();
+            (settings.speakers_enabled, settings.music_rejection)
         };
-        let Ok(installed) = shared.store.installed_models() else {
-            return SeparationState::NeedsModels;
+        let program = shared.config.speaker_worker.clone().filter(|p| p.is_file());
+        let speakers = if speakers_on {
+            shared.store.installed_models().ok().and_then(|installed| {
+                let paths: Option<Vec<_>> = SPEAKER_CATALOG.iter().map(|e| installed_path(e, &installed)).collect();
+                paths.and_then(|p| <[_; 2]>::try_from(p).ok()).map(|[segmentation, embedding]| (segmentation, embedding))
+            })
+        } else {
+            None
         };
-        let paths: Option<Vec<_>> = SPEAKER_CATALOG.iter().map(|e| installed_path(e, &installed)).collect();
-        let Some([segmentation, embedding]) = paths.and_then(|p| <[_; 2]>::try_from(p).ok()) else {
-            return SeparationState::NeedsModels;
+        let sound = shared.config.sound_model.clone().filter(|(model, labels)| music_on && model.is_file() && labels.is_file());
+        let mut state = match (speakers_on, &program, &speakers) {
+            (false, _, _) => SeparationState::Off,
+            (true, None, _) => SeparationState::Unavailable,
+            (true, Some(_), None) => SeparationState::NeedsModels,
+            (true, Some(_), Some(_)) => SeparationState::Ready,
         };
-        let config = WorkerConfig { program, segmentation, embedding };
-        if self.worker.as_ref().map(Worker::config) != Some(&config) {
-            let mut worker = Worker::new(config);
-            worker.set_cancel(shared.cancel_asr.clone());
-            self.worker = Some(worker);
-            self.gave_up_noticed = false;
+        match program {
+            Some(program) if speakers.is_some() || sound.is_some() => {
+                let config = WorkerConfig { program, speakers, sound };
+                if self.worker.as_ref().map(Worker::config) != Some(&config) {
+                    let mut worker = Worker::new(config);
+                    worker.set_cancel(shared.cancel_asr.clone());
+                    self.worker = Some(worker);
+                    self.gave_up_noticed = false;
+                }
+            }
+            _ => self.worker = None,
         }
         if self.worker.as_ref().is_some_and(Worker::given_up) {
             if !std::mem::replace(&mut self.gave_up_noticed, true) {
-                shared.notice("speaker separation stopped after repeated failures; transcripts are unaffected. Restart tuldMi to try again");
+                shared.notice("speaker separation and music detection stopped after repeated failures; transcripts are unaffected. Restart tuldMi to try again");
             }
-            return SeparationState::Unavailable;
+            if state == SeparationState::Ready {
+                state = SeparationState::Unavailable;
+            }
         }
-        SeparationState::Ready
+        state
+    }
+
+    /// Score an event's audio for music rejection. None = don't judge it (switched off, no
+    /// classifier, too short to tell, or the worker failed): it is transcribed as before.
+    #[cfg_attr(not(feature = "whisper"), allow(dead_code))]
+    pub fn classify(&mut self, shared: &Shared, samples: &[f32]) -> Option<crate::speakers::protocol::Sound> {
+        // Under a second, the classifier has too little to go on; such clips are short words.
+        if samples.len() < 16_000 {
+            return None;
+        }
+        set_state(shared, self.check(shared));
+        let worker = self.worker.as_mut()?;
+        if worker.config().sound.is_none() || worker.given_up() {
+            return None;
+        }
+        worker.classify(samples).ok()
     }
 
     fn separate_samples(&mut self, shared: &Shared, samples: &[f32]) -> Option<Reply> {

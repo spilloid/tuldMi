@@ -168,6 +168,13 @@ pub async fn rename_speaker(state: State<'_, AppState>, id: String, label: Strin
     state.engine.rename_speaker(id, &label).map_err(err)
 }
 
+/// "Transcribe anyway" on an event judged music; false if it can't be.
+#[tauri::command]
+pub async fn transcribe_anyway(state: State<'_, AppState>, id: String) -> Res<bool> {
+    let id = uuid::Uuid::parse_str(&id).map_err(err)?;
+    state.engine.transcribe_anyway(id).map_err(err)
+}
+
 /// Starts "Separate past recordings"; returns how many events it will look at.
 #[tauri::command]
 pub async fn separate_past_recordings(state: State<'_, AppState>) -> Res<u32> {

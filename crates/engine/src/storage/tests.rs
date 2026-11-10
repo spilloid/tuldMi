@@ -618,3 +618,33 @@ fn orphaned_speakers_lose_their_name_but_keep_their_number() -> Result<()> {
     assert_eq!(store.max_speaker_ordinal(t0, t0 + 3_000)?, 2);
     Ok(())
 }
+
+// ---- music rejection ----------------------------------------------------------------------
+
+#[test]
+fn music_is_kept_like_quiet_audio_and_can_be_transcribed_anyway() -> Result<()> {
+    let (directory, store) = setup()?;
+    let session = store.start_session(0)?;
+    let path = directory.path().join("audio").join("song.ogg");
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    std::fs::write(&path, b"OggS")?;
+    let event = insert(&store, &session, 1_000, Some(audio(path.clone())))?;
+    let job = store.next_job()?.unwrap();
+    assert!(!job.transcribe_anyway);
+    let saved = store.save_music(event.id, "m")?;
+    assert_eq!(saved.status, EventStatus::Empty);
+    assert_eq!(saved.error.as_deref(), Some(MUSIC_NOTE));
+    assert!(saved.segments.is_empty());
+    // Delete-after-transcription: music, never transcribed, gets the quiet grace period.
+    assert!(store.expire_audio_events_before(i64::MAX, 0)?.is_empty());
+    assert!(store.get_event(event.id)?.unwrap().audio.is_some());
+    // "Transcribe anyway": requeued, and the next job skips the music check.
+    assert!(store.transcribe_anyway(event.id)?);
+    let again = store.get_event(event.id)?.unwrap();
+    assert_eq!((again.status, again.error), (EventStatus::Queued, None));
+    let job = store.next_job()?.unwrap();
+    assert!(job.transcribe_anyway);
+    // Only music can be transcribed anyway.
+    assert!(!store.transcribe_anyway(event.id)?, "it's transcribing now, not music");
+    Ok(())
+}

@@ -50,6 +50,18 @@ The `TranscriptionProvider` trait is the seam for adding it (likely v0.2).
 
 No cloud ASR.
 
+## Music detection (0.4.0, bundled)
+
+| Model | File | Size | License |
+|---|---|---|---|
+| CED-tiny AudioSet tagger (RicherMans/CED; ONNX int8 export by sherpa-onnx) | `ced-tiny-audioset.int8.onnx` + `audioset-labels.csv` | 6.1 MB | Apache-2.0 |
+
+Shipped inside the installer (like the Silero VAD model) and run by `tuldmi-speakers`. Only the
+Speech, Music and Singing classes are used. Thresholds and calibration: docs/design/speakers.md,
+"Music". From sherpa-onnx's `audio-tagging-models` release
+(`sherpa-onnx-ced-tiny-audio-tagging-2024-04-19`); SHA-256 of the model
+`73aa22e783115f6a4ae169b36089907e07d0fd44795595eddea9c1bfc74cc945`.
+
 ## Speaker separation (0.4.0, optional)
 
 Downloaded together, only when the user asks (Settings → Transcription → Speakers), from

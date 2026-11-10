@@ -97,6 +97,7 @@ fn past_conversation_gets_separated_speakers() {
             vad_model_path: None,
             suppress_autostart: true,
             speaker_worker: Some(env!("CARGO_BIN_EXE_tuldmi-speakers").into()),
+            sound_model: None,
         },
         sink.clone(),
     )

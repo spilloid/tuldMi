@@ -89,6 +89,9 @@ export interface AudioRef {
 
 export const PEAKS_PER_SECOND = 50;
 
+/** The engine's `MUSIC_NOTE`: an `empty` event the sound classifier judged music. */
+export const MUSIC_NOTE = "Music; audio kept";
+
 export interface TranscriptSegment {
   id: Uuid;
   eventId: Uuid;
@@ -199,6 +202,8 @@ export interface Settings {
   mcp: McpSettings;
   /** Separate remote speakers (needs the two speaker models). Off by default. */
   speakersEnabled: boolean;
+  /** Keep music as a collapsed "Music" row instead of transcribing lyrics. On by default. */
+  musicRejection: boolean;
 }
 
 export interface McpSettings {
@@ -229,6 +234,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
   mcp: DEFAULT_MCP,
   speakersEnabled: false,
+  musicRejection: true,
 };
 
 export interface ModelInfo {

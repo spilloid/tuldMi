@@ -79,6 +79,10 @@ Speakers), results name them: event text marks each change of speaker ("Speaker 
 said them. Speech nobody could be sure about stays "Remote". Speaker names are part of Remote, so
 an assistant sees them only with *Include the other side (Remote)* on.
 
+## Music
+
+Events tuldMi judged music have no text and `"music": true` (listed as "(music)").
+
 ## What is logged
 
 `tuldmi-mcp` writes one line per call to standard error, which assistants show in their MCP logs:

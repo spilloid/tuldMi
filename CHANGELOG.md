@@ -15,6 +15,11 @@ All notable changes to tuldMi are documented here. Format: [Keep a Changelog](ht
   pyannote segmentation 3.0 and NVIDIA TitaNet-small, 46 MB downloaded on request). Voice
   fingerprints exist only in memory for the current conversation and are never saved.
   **Separate past recordings** labels earlier conversations whose audio you kept.
+- **Music isn't transcribed (on by default).** Music and singing with nobody talking show as a
+  collapsed Music row ("Music · 40 s · 10 clips") instead of transcribed lyrics. A small sound
+  classifier that ships with tuldMi (CED-tiny, Apache-2.0, 6 MB) decides on your computer; speech
+  over music is still transcribed. If a row is really speech, **Transcribe anyway**. Switch it off
+  in Settings › Transcription › Skip music.
 - **Copy what was said.** Shift+click two events to select everything between them, then press
   Ctrl+C (⌘C) or use the Copy bar; each conversation also has **Copy conversation**. The text is
   one `[2026-11-09 14:02:11] Speaker: …` line per speaker.

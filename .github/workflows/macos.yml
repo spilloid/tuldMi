@@ -88,6 +88,8 @@ jobs:
           test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = 15.4
           test "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")" = "$v"
           test -f "$app/Contents/Resources/ggml-silero-v6.2.0.bin"
+          test -f "$app/Contents/Resources/ced-tiny-audioset.int8.onnx"
+          test -f "$app/Contents/Resources/audioset-labels.csv"
           exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")"
           lipo -archs "$exe" | grep -qx arm64
           # tuldmi-mcp finds the app as its sibling `tuldmi`, and must run on its own.

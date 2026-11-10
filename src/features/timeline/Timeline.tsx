@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowDown, Copy, Loader2, X } from "lucide-react";
+import { ArrowDown, ChevronRight, Copy, Loader2, Music, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SpeechEvent } from "../../lib/ipc/types";
 import type { Conversation } from "../../lib/time";
@@ -9,7 +9,7 @@ import { isTypingTarget, overlayOpen, plain } from "../../lib/keys";
 import { transition, useReducedMotion } from "../../lib/motion";
 import { useBackend, useStatus, useTimeline } from "../../state/hooks";
 import { useUi } from "../../state/ui";
-import { EventRow } from "./EventRow";
+import { EventRow, isMusic } from "./EventRow";
 import { useEventActions } from "./actions";
 import { TimelineEmpty } from "./TimelineEmpty";
 
@@ -432,9 +432,8 @@ function ConversationBlock({
         </div>
       </div>
       <div className="flex flex-col gap-px">
-        {c.events.map((ev, i) => {
-          const prev = c.events[i - 1];
-          return (
+        {groupMusic(c.events).map((item) => {
+          const row = (ev: SpeechEvent, prev: SpeechEvent | undefined) => (
             <EventRow
               key={ev.id}
               ev={ev}
@@ -451,9 +450,60 @@ function ConversationBlock({
               onRange={onRange}
             />
           );
+          if (item.events.length === 1) return row(item.events[0], c.events[c.events.indexOf(item.events[0]) - 1]);
+          return <MusicRun key={`m:${item.events[0].id}`} events={item.events} render={row} />;
         })}
       </div>
     </section>
+  );
+}
+
+/** Consecutive music events become one run (music is chopped into short clips by the speech
+ *  detector); everything else stays one event per item. */
+function groupMusic(events: SpeechEvent[]): { events: SpeechEvent[] }[] {
+  const items: { events: SpeechEvent[] }[] = [];
+  for (const ev of events) {
+    const last = items[items.length - 1];
+    if (last && isMusic(ev) && isMusic(last.events[last.events.length - 1])) last.events.push(ev);
+    else items.push({ events: [ev] });
+  }
+  return items;
+}
+
+/** A run of music clips, collapsed to one row; opening it shows each clip (to play it, or to
+ *  transcribe one anyway). "Transcribe anyway" on the run applies to every clip in it. */
+function MusicRun({ events, render }: { events: SpeechEvent[]; render: (ev: SpeechEvent, prev: SpeechEvent | undefined) => React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const actions = useEventActions();
+  const first = events[0];
+  const span = Math.max(...events.map((e) => e.endedAt)) - first.startedAt;
+  const withAudio = events.filter((e) => e.audio);
+  return (
+    <div>
+      <div className="grid grid-cols-[56px_minmax(0,1fr)] items-center rounded-lg hover:bg-hover">
+        <div className="select-none pr-3 text-right font-mono text-[11px] text-faint tnum">{clock(first.startedAt)}</div>
+        <div className="flex items-center gap-2 py-1.5 text-base text-faint">
+          <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="inline-flex items-center gap-1.5 rounded hover:text-text">
+            <ChevronRight size={13} className={`transition-transform ${open ? "rotate-90" : ""}`} aria-hidden />
+            <Music size={14} aria-hidden />
+            <span className="italic">
+              Music · {humanDuration(span)} · {events.length} clips
+            </span>
+          </button>
+          {withAudio.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void Promise.all(withAudio.map((e) => actions.transcribeAnyway(e)))}
+              title="If this was speech, transcribe all of it"
+              className="ml-1 rounded px-1.5 text-sm font-medium text-accent-text hover:bg-hover"
+            >
+              Transcribe anyway
+            </button>
+          )}
+        </div>
+      </div>
+      {open && <div className="flex flex-col gap-px">{events.map((ev, i) => render(ev, events[i - 1]))}</div>}
+    </div>
   );
 }
 

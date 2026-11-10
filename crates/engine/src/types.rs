@@ -362,6 +362,9 @@ pub struct Settings {
     pub mcp: McpSettings,
     /// Separate remote speakers (needs the two speaker models). Off by default.
     pub speakers_enabled: bool,
+    /// Keep music as a collapsed "Music" row instead of transcribing lyrics (the sound
+    /// classifier is bundled). On by default.
+    pub music_rejection: bool,
 }
 
 /// The ceiling on `tuldmi-mcp` (docs/design/mcp.md), re-read by it on every request.
@@ -412,6 +415,7 @@ impl Default for Settings {
             theme: Theme::System,
             mcp: McpSettings::default(),
             speakers_enabled: false,
+            music_rejection: true,
         }
     }
 }

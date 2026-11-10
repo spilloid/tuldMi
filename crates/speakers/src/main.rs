@@ -1,20 +1,29 @@
-//! `tuldmi-speakers`: separates who spoke when in a buffer of system audio.
+//! `tuldmi-speakers`: separates who spoke when in a buffer of audio, and tells music from speech.
 //!
 //! The engine starts this process and talks to it over stdin/stdout
 //! (`tuldmi_engine::speakers::protocol`). It runs sherpa-onnx — pyannote segmentation 3.0 plus
-//! NeMo TitaNet-small embeddings — which can end the process from inside C++, so it never runs in
-//! the app (docs/design/speakers.md). It sees audio only, never text, writes nothing but replies
-//! to stdout, and exits when stdin closes.
+//! NeMo TitaNet-small embeddings for speakers, CED-tiny (AudioSet) for music rejection — which
+//! can end the process from inside C++, so it never runs in the app (docs/design/speakers.md).
+//! It sees audio only, never text, writes nothing but replies to stdout, and exits when stdin
+//! closes. Each capability is loaded only when its models are given; at least one is required.
 //!
-//!   tuldmi-speakers --segmentation <model.onnx> --embedding <titanet.onnx>
+//!   tuldmi-speakers [--segmentation <model.onnx> --embedding <titanet.onnx>]
+//!                   [--sound <ced.onnx> --sound-labels <class_labels_indices.csv>]
 
 use sherpa_onnx::{
-    OfflineSpeakerDiarization, OfflineSpeakerDiarizationConfig, SpeakerEmbeddingExtractor,
-    SpeakerEmbeddingExtractorConfig,
+    AudioTagging, AudioTaggingConfig, OfflineSpeakerDiarization, OfflineSpeakerDiarizationConfig,
+    SpeakerEmbeddingExtractor, SpeakerEmbeddingExtractorConfig,
 };
 use std::io::{self, BufReader, BufWriter};
 use std::process::ExitCode;
-use tuldmi_engine::speakers::protocol::{self, Reply, Turn, Voice};
+use tuldmi_engine::speakers::protocol::{self, Kind, Reply, Sound, Turn, Voice};
+
+/// AudioSet class indices (class_labels_indices.csv).
+const SPEECH: i32 = 0;
+const MUSIC: i32 = 137;
+const SINGING: [i32; 5] = [27, 32, 33, 34, 35];
+/// The classifier was trained on 10 s clips: longer events are scored in 10 s windows.
+const SOUND_WINDOW: usize = 10 * RATE;
 
 const RATE: usize = 16_000;
 /// Speaker-clustering threshold *within* one buffer. Deliberately low: splitting one person in
@@ -35,10 +44,74 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
-    let (Some(segmentation), Some(embedding)) = (value("--segmentation"), value("--embedding")) else {
-        eprintln!("usage: tuldmi-speakers --segmentation <model.onnx> --embedding <model.onnx>");
-        return ExitCode::from(2);
+    let speakers = match (value("--segmentation"), value("--embedding")) {
+        (Some(segmentation), Some(embedding)) => match load_speakers(segmentation, embedding) {
+            Some(loaded) => Some(loaded),
+            None => return ExitCode::from(2),
+        },
+        _ => None,
     };
+    let tagger = match (value("--sound"), value("--sound-labels")) {
+        (Some(model), Some(labels)) => {
+            let mut config = AudioTaggingConfig::default();
+            config.model.ced = Some(model);
+            config.model.num_threads = THREADS;
+            config.labels = Some(labels);
+            config.top_k = 527;
+            match AudioTagging::create(&config) {
+                Some(tagger) => Some(tagger),
+                None => {
+                    eprintln!("could not load the sound classifier");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        _ => None,
+    };
+    if speakers.is_none() && tagger.is_none() {
+        eprintln!("usage: tuldmi-speakers [--segmentation <model.onnx> --embedding <model.onnx>] [--sound <model.onnx> --sound-labels <labels.csv>]");
+        return ExitCode::from(2);
+    }
+
+    let mut input = BufReader::new(io::stdin().lock());
+    let mut output = BufWriter::new(io::stdout().lock());
+    loop {
+        let (kind, samples) = match protocol::read_request(&mut input) {
+            Ok(Some(request)) => request,
+            Ok(None) => return ExitCode::SUCCESS,
+            Err(_) => return ExitCode::from(1),
+        };
+        let reply = match (kind, &speakers, &tagger) {
+            (Kind::Separate, Some((diarizer, extractor)), _) => separate(diarizer, extractor, &samples),
+            (Kind::Classify, _, Some(tagger)) => Reply { sound: Some(classify(tagger, &samples)), ..Reply::default() },
+            _ => Reply { error: Some("not loaded".into()), ..Reply::default() },
+        };
+        if protocol::write_reply(&mut output, &reply).is_err() {
+            return ExitCode::from(1);
+        }
+    }
+}
+
+/// The highest score of each class over the event, in windows of at most 10 s. Taking the
+/// maximum is the cautious choice: any window with speech keeps the event as speech.
+fn classify(tagger: &AudioTagging, samples: &[f32]) -> Sound {
+    let mut sound = Sound::default();
+    for window in samples.chunks(SOUND_WINDOW) {
+        let mut audio = window.to_vec();
+        audio.resize(audio.len().max(RATE), 0.0); // at least 1 s
+        let stream = tagger.create_stream();
+        stream.accept_waveform(RATE as i32, &audio);
+        let events = tagger.compute(&stream, 527);
+        let p = |i: i32| events.iter().find(|e| e.index == i).map_or(0.0, |e| e.prob).clamp(0.0, 1.0);
+        let p = |i: i32| if p(i).is_finite() { p(i) } else { 0.0 };
+        sound.speech = sound.speech.max(p(SPEECH));
+        sound.music = sound.music.max(p(MUSIC));
+        sound.singing = sound.singing.max(SINGING.iter().map(|&i| p(i)).fold(0.0, f32::max));
+    }
+    sound
+}
+
+fn load_speakers(segmentation: String, embedding: String) -> Option<(OfflineSpeakerDiarization, SpeakerEmbeddingExtractor)> {
     let mut config = OfflineSpeakerDiarizationConfig::default();
     config.segmentation.pyannote.model = Some(segmentation);
     config.segmentation.num_threads = THREADS;
@@ -50,7 +123,7 @@ fn main() -> ExitCode {
     config.min_duration_off = 0.5;
     let Some(diarizer) = OfflineSpeakerDiarization::create(&config) else {
         eprintln!("could not load the segmentation or embedding model");
-        return ExitCode::from(2);
+        return None;
     };
     let Some(extractor) = SpeakerEmbeddingExtractor::create(&SpeakerEmbeddingExtractorConfig {
         model: Some(embedding),
@@ -59,22 +132,9 @@ fn main() -> ExitCode {
         provider: None,
     }) else {
         eprintln!("could not load the embedding model");
-        return ExitCode::from(2);
+        return None;
     };
-
-    let mut input = BufReader::new(io::stdin().lock());
-    let mut output = BufWriter::new(io::stdout().lock());
-    loop {
-        let samples = match protocol::read_request(&mut input) {
-            Ok(Some(samples)) => samples,
-            Ok(None) => return ExitCode::SUCCESS,
-            Err(_) => return ExitCode::from(1),
-        };
-        let reply = separate(&diarizer, &extractor, &samples);
-        if protocol::write_reply(&mut output, &reply).is_err() {
-            return ExitCode::from(1);
-        }
-    }
+    Some((diarizer, extractor))
 }
 
 fn separate(diarizer: &OfflineSpeakerDiarization, extractor: &SpeakerEmbeddingExtractor, samples: &[f32]) -> Reply {
@@ -128,5 +188,5 @@ fn separate(diarizer: &OfflineSpeakerDiarization, extractor: &SpeakerEmbeddingEx
             voices.push(Voice { local, speech_ms: (audio.len() * 1000 / RATE) as i64, embedding });
         }
     }
-    Reply { turns, voices, error: None }
+    Reply { turns, voices, sound: None, error: None }
 }

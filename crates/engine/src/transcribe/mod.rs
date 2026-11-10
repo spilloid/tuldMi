@@ -14,7 +14,7 @@ pub mod whisper;
 use crate::storage::NewSegment;
 use crate::Result;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Transcript {
     pub segments: Vec<NewSegment>,
     /// `pieces[i]`: segment i's text tokens with times (for splitting by speaker); may be empty.

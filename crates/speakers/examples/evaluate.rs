@@ -13,7 +13,7 @@ use tuldmi_engine::speakers::{tracker::{Tracker, PROMOTE_MS}, worker::{Worker, W
 
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
-    let mut worker = Worker::new(WorkerConfig { program: (&a[0]).into(), segmentation: (&a[1]).into(), embedding: (&a[2]).into() });
+    let mut worker = Worker::new(WorkerConfig { program: (&a[0]).into(), speakers: Some(((&a[1]).into(), (&a[2]).into())), sound: None });
     let mut reader = hound::WavReader::open(&a[3]).expect("wav");
     assert_eq!(reader.spec().sample_rate, 16_000);
     let audio: Vec<f32> = reader.samples::<i16>().map(|s| s.unwrap() as f32 / 32768.0).collect();

@@ -16,6 +16,7 @@ fn engine(dir: &Path, provider: Arc<dyn AudioCaptureProvider>) -> Result<Engine>
             vad_model_path: None,
             suppress_autostart: true,
             speaker_worker: None,
+            sound_model: None,
         },
         Arc::new(Collect::default()),
         provider,
@@ -339,7 +340,7 @@ fn a_stale_paused_status_is_never_published_after_recording() -> Result<()> {
     });
     let (wake, _waking) = crossbeam_channel::bounded(1);
     let shared = Arc::new(Shared::new(
-        EngineConfig { data_dir: dir.path().into(), vad_model_path: None, suppress_autostart: true, speaker_worker: None },
+        EngineConfig { data_dir: dir.path().into(), vad_model_path: None, suppress_autostart: true, speaker_worker: None, sound_model: None },
         store,
         sink.clone(),
         Arc::new(FakeProvider::new()),
@@ -386,7 +387,7 @@ fn audio_that_cannot_be_removed_yet_is_retried_until_it_is() -> Result<()> {
     let settings = store.load_settings()?;
     let (wake, _waking) = crossbeam_channel::bounded(1);
     let shared = Shared::new(
-        EngineConfig { data_dir: dir.path().into(), vad_model_path: None, suppress_autostart: true, speaker_worker: None },
+        EngineConfig { data_dir: dir.path().into(), vad_model_path: None, suppress_autostart: true, speaker_worker: None, sound_model: None },
         store,
         Arc::new(Collect::default()),
         Arc::new(FakeProvider::new()),

@@ -10,3 +10,6 @@ ALTER TABLE audio_events ADD COLUMN speakers_state TEXT CHECK (speakers_state IN
 CREATE INDEX transcript_segments_speaker ON transcript_segments(speaker_id);
 ALTER TABLE speakers ADD COLUMN ordinal INTEGER;
 ALTER TABLE speakers ADD COLUMN seen_at INTEGER;
+-- Music rejection: an event judged music is `empty` with MUSIC_NOTE as its note. The user can
+-- override that ("Transcribe anyway"), which sets transcribe_anyway so the music check is skipped.
+ALTER TABLE audio_events ADD COLUMN transcribe_anyway INTEGER NOT NULL DEFAULT 0;

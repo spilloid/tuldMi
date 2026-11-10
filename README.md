@@ -33,6 +33,9 @@ playable timeline of what was said. Nothing leaves your device unless you connec
   with two small models you download on request; voice fingerprints are never saved. Earlier
   conversations whose audio you kept can be separated too. See
   [docs/design/speakers.md](docs/design/speakers.md).
+- **Music isn't transcribed** (on by default): music and singing with nobody talking show as a
+  collapsed Music row instead of lyrics, judged on your computer by a small bundled classifier.
+  Speech over music is still transcribed, and **Transcribe anyway** fixes a wrong call.
 - **Copy what was said**: Shift+click to select a stretch of the timeline and copy it, or copy a
   whole conversation, as timestamped `[time] Speaker: text` lines.
 - **Instant full-text search** (SQLite FTS5) with highlights, Me/Remote and date filters, speaker

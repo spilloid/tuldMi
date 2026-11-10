@@ -64,9 +64,12 @@ pub struct EngineConfig {
     pub vad_model_path: Option<PathBuf>,
     /// Override for tests: never start capture automatically even if settings say so.
     pub suppress_autostart: bool,
-    /// The `tuldmi-speakers` worker installed with the app. None = speaker separation is
-    /// unavailable in this build (Settings says so).
+    /// The `tuldmi-speakers` worker installed with the app. None = speaker separation and music
+    /// rejection are unavailable in this build (Settings says so).
     pub speaker_worker: Option<PathBuf>,
+    /// The bundled sound classifier for music rejection: (CED model, AudioSet label list).
+    /// None or missing files = music is transcribed like speech.
+    pub sound_model: Option<(PathBuf, PathBuf)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -361,6 +364,24 @@ impl Engine {
     /// Start separating speakers in past conversations whose audio is still kept. Runs on the
     /// transcription thread whenever nothing waits for transcription. Returns how many system
     /// events could be looked at (0 = nothing to do).
+    /// "Transcribe anyway" on an event judged music. False if it can't be (not music, or its
+    /// audio is gone).
+    pub fn transcribe_anyway(&self, id: Uuid) -> Result<bool> {
+        let queued = {
+            let _gate = self.shared.persist_gate.lock();
+            let queued = self.shared.store.transcribe_anyway(id)?;
+            if queued {
+                self.shared.upsert(id)?;
+            }
+            queued
+        };
+        if queued {
+            self.shared.refresh_backlog();
+            let _ = self.shared.wake.try_send(());
+        }
+        Ok(queued)
+    }
+
     pub fn separate_past_recordings(&self) -> Result<u32> {
         if !self.shared.settings.lock().speakers_enabled {
             return Err(Error::Other("turn on speaker separation first".into()));

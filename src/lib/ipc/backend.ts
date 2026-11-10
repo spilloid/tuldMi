@@ -71,6 +71,8 @@ export interface Backend {
   speakerModels(): Promise<ModelInfo[]>;
   /** Rename a separated remote speaker (kind "person"). */
   renameSpeaker(id: string, label: string): Promise<void>;
+  /** "Transcribe anyway" on an event judged music; false if it can't be (audio gone). */
+  transcribeAnyway(id: string): Promise<boolean>;
   /** Start "Separate past recordings"; resolves to how many events it will look at. */
   separatePastRecordings(): Promise<number>;
   exportTranscripts(format: ExportFormat, from: number | null, to: number | null): Promise<string>;

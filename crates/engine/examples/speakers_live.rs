@@ -4,9 +4,10 @@
 //! it prints a few labelled lines of transcript.
 //!
 //!   cargo run --release -p tuldmi-engine --example speakers_live -- <ggml-base.en.bin> \
-//!       <silero.bin> <tuldmi-speakers> <models dir> <recording.wav> [seconds]
+//!       <silero.bin> <tuldmi-speakers> <models dir> <recording.wav> [seconds] [sound.onnx labels.csv]
 //!
-//! `models dir` holds pyannote-segmentation-3.0.onnx and nemo-titanet-small.onnx.
+//! `models dir` holds pyannote-segmentation-3.0.onnx and nemo-titanet-small.onnx. With the sound
+//! classifier given, music rejection runs too and each event is listed.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -52,7 +53,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let provider = FakeProvider::new().with_source(Source::System, FakeSource { silence_when_exhausted: false, ..FakeSource::mono_16k(audio.clone()) });
     let sink = Arc::new(Sink::default());
-    let config = EngineConfig { data_dir: dir.clone(), vad_model_path: Some(silero.into()), suppress_autostart: true, speaker_worker: Some(worker.into()) };
+    let sound_model = a.get(6).zip(a.get(7)).map(|(m, l)| (PathBuf::from(m), PathBuf::from(l)));
+    let config = EngineConfig { data_dir: dir.clone(), vad_model_path: Some(silero.into()), suppress_autostart: true, speaker_worker: Some(worker.into()), sound_model };
     let engine = Engine::start_with_provider(config, sink.clone(), Arc::new(provider))?;
     for m in &installed {
         engine.store().record_model(m)?;
@@ -107,6 +109,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             last = who;
         }
         println!("    {}", s.text);
+    }
+    println!("events in order:");
+    for e in &events {
+        let text: String = e.segments.iter().map(|s| s.text.trim()).collect::<Vec<_>>().join(" ").chars().take(60).collect();
+        println!(
+            "  +{:>5.1} s {:>5.1} s  {:?}{}  {}",
+            (e.started_at - events[0].started_at) as f32 / 1000.0,
+            (e.ended_at - e.started_at) as f32 / 1000.0,
+            e.status,
+            if e.error.as_deref() == Some(tuldmi_engine::storage::MUSIC_NOTE) { " MUSIC" } else { "" },
+            text
+        );
     }
     for notice in sink.0.lock().iter() {
         println!("notice: {notice}");

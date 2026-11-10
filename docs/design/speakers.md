@@ -127,3 +127,18 @@ Segments are labelled with their speaker's name. The ceiling is unchanged: a spe
 - **Embeddings:** these are voice fingerprints of other people. They exist only in the app's memory, for the current conversation, and are dropped when the conversation ends (checked while idle too, not only when the next event arrives), when the feature is turned off (checked on every loop of the transcription thread), and at quit. A result that arrives after the feature was turned off is discarded. They are never written to disk or logged.
 - **Names** the user types are stored in `speakers.label`. Once no remaining speech shows a speaker, its name is reset to "Speaker N" by the daily sweep.
 - **PRIVACY.md and README** stop saying "not identified" and describe exactly this.
+
+## Music (0.4.0)
+
+Silero, the voice detector, triggers on sung vocals, so music used to be kept and its lyrics transcribed. With music rejection on (Settings › Transcription › Skip music; **on by default**):
+
+- **The classifier ships with the app.** CED-tiny (AudioSet, Apache-2.0, `src-tauri/resources/ced-tiny-audioset.int8.onnx`, 6.1 MB) runs in the same `tuldmi-speakers` worker, as a `Classify` request. The worker loads it with `--sound` / `--sound-labels`, alongside or instead of the speaker models. No download is needed.
+- **Before Whisper**, each event of either source that is at least 1 s long and not gated as quiet is scored for Speech, Music and Singing: the highest score over windows of at most 10 s.
+- **The rule** (`speakers::music::is_music`): music when speech < 0.2 and the higher of music and singing ≥ 0.2.
+  - Calibrated on 2026-11-10 against Wikimedia Commons music (solo piano, a cappella choir, sung anthem, radio jingle), AMI meetings and a NASA podcast.
+  - Speech never scored music above 0.04. Music never scored speech above 0.06. Speech over music scored speech 0.44 or higher, so it is kept.
+- **A music event** is saved `empty` with the note `MUSIC_NOTE`, like quiet clips: no transcript, and its audio is kept as usual. Under delete-after-transcription it gets the quiet clips' 24 h grace.
+- **The timeline** shows it collapsed ("Music · 2 s"). The speech detector chops music into short clips, so consecutive music events become one run ("Music · 40 s · 10 clips") that opens to show each clip.
+- **False positives:** **Transcribe anyway** on a clip or a run requeues it with `audio_events.transcribe_anyway = 1`, which skips the music check.
+- **Any doubt transcribes as before:** the switch off, the classifier or worker missing, a worker failure, or a clip under 1 s.
+- **Later (0.4.1):** choosing a different model for one section and reprocessing it.

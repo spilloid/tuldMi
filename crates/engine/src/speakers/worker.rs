@@ -6,7 +6,7 @@
 //! `MAX_FAILURES` consecutive failures the worker stays off for the rest of the session.
 //! The worker's stderr is discarded; it is never given or shown transcript text.
 
-use super::protocol::{self, Reply};
+use super::protocol::{self, Kind, Reply, Sound};
 use crate::{Error, Result};
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use std::io;
@@ -22,8 +22,10 @@ pub const MAX_FAILURES: u32 = 3;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerConfig {
     pub program: PathBuf,
-    pub segmentation: PathBuf,
-    pub embedding: PathBuf,
+    /// Speaker separation: (segmentation model, embedding model).
+    pub speakers: Option<(PathBuf, PathBuf)>,
+    /// Music rejection: (sound classifier model, its AudioSet label list).
+    pub sound: Option<(PathBuf, PathBuf)>,
 }
 
 struct Running {
@@ -79,12 +81,27 @@ impl Worker {
 
     /// Separate the speakers in `samples` (16 kHz mono). The reply is validated.
     pub fn separate(&mut self, samples: &[f32]) -> Result<Reply> {
+        if self.config.speakers.is_none() {
+            return Err(Error::Other("speaker separation isn't set up".into()));
+        }
+        self.ask(Kind::Separate, samples)
+    }
+
+    /// Score what kind of sound `samples` is (16 kHz mono), for music rejection.
+    pub fn classify(&mut self, samples: &[f32]) -> Result<Sound> {
+        if self.config.sound.is_none() {
+            return Err(Error::Other("the sound classifier isn't set up".into()));
+        }
+        self.ask(Kind::Classify, samples)?.sound.ok_or_else(|| Error::Other("no sound scores".into()))
+    }
+
+    fn ask(&mut self, kind: Kind, samples: &[f32]) -> Result<Reply> {
         if self.given_up() {
-            return Err(Error::Other("speaker separation is unavailable".into()));
+            return Err(Error::Other("the worker is unavailable".into()));
         }
         let duration_ms = samples.len() as i64 / 16;
-        let result = self.request(samples).and_then(|reply| {
-            protocol::validate(&reply, duration_ms).map_err(|e| Error::Other(e.into()))?;
+        let result = self.request(kind, samples).and_then(|reply| {
+            protocol::validate(&reply, kind, duration_ms).map_err(|e| Error::Other(e.into()))?;
             Ok(reply)
         });
         match &result {
@@ -99,7 +116,7 @@ impl Worker {
         result
     }
 
-    fn request(&mut self, samples: &[f32]) -> Result<Reply> {
+    fn request(&mut self, kind: Kind, samples: &[f32]) -> Result<Reply> {
         if self.running.is_none() {
             self.running = Some(self.spawn()?);
         }
@@ -112,7 +129,7 @@ impl Worker {
         // but not reading would otherwise block this one in `write` before any deadline or
         // cancellation check. Killing the child breaks the pipe and frees the writer.
         std::thread::scope(|scope| {
-            let writer = scope.spawn(move || protocol::write_request(stdin, samples));
+            let writer = scope.spawn(move || protocol::write_request(stdin, kind, samples));
             // Supervise until both the write and the reply are complete: a confused worker
             // could answer early and stop reading, leaving the write (and a join) blocked.
             let mut reply = None;
@@ -154,7 +171,12 @@ impl Worker {
 
     fn spawn(&self) -> Result<Running> {
         let mut command = Command::new(&self.config.program);
-        command.arg("--segmentation").arg(&self.config.segmentation).arg("--embedding").arg(&self.config.embedding);
+        if let Some((segmentation, embedding)) = &self.config.speakers {
+            command.arg("--segmentation").arg(segmentation).arg("--embedding").arg(embedding);
+        }
+        if let Some((model, labels)) = &self.config.sound {
+            command.arg("--sound").arg(model).arg("--sound-labels").arg(labels);
+        }
         #[cfg(test)]
         if let Some(args) = &self.args {
             command = Command::new(&self.config.program);
@@ -236,7 +258,7 @@ mod tests {
     use super::*;
 
     fn config(program: &str) -> WorkerConfig {
-        WorkerConfig { program: program.into(), segmentation: "seg.onnx".into(), embedding: "emb.onnx".into() }
+        WorkerConfig { program: program.into(), speakers: Some(("seg.onnx".into(), "emb.onnx".into())), sound: None }
     }
 
     #[test]

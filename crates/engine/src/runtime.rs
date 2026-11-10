@@ -1088,14 +1088,24 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 // The provider skips inference below the energy gate; remember that, since
                 // such an empty result was never actually transcribed.
                 let gated = crate::transcribe::below_energy_gate(&samples);
+                // Music rejection: music or singing with no speech isn't transcribed (None).
+                // "Transcribe anyway" skips the check; any doubt (no classifier, a worker
+                // failure, a clip under a second) transcribes as before.
+                if settings.music_rejection
+                    && !gated
+                    && !job.transcribe_anyway
+                    && separation.classify(&shared, &samples).is_some_and(|s| crate::speakers::music::is_music(&s))
+                {
+                    return Ok((None, gated, samples));
+                }
                 provider
                     .transcribe(&samples, Some(&settings.language))
-                    .map(|transcript| (transcript, gated, samples))
+                    .map(|transcript| (Some(transcript), gated, samples))
             })();
             // Speakers are separated outside the persist gate (the worker can take seconds) and
             // saved inside it with the transcript.
             let separated = match &result {
-                Ok((transcript, gated, samples)) if !(*gated && transcript.segments.is_empty()) => {
+                Ok((Some(transcript), gated, samples)) if !(*gated && transcript.segments.is_empty()) => {
                     separation.separate_live(&shared, &job, placement, samples, transcript)
                 }
                 _ => None,
@@ -1110,9 +1120,15 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
             }
             let mut relabelled = Vec::new();
             match result {
-                Ok((transcript, gated, _)) => {
-                    let untranscribed = gated && transcript.segments.is_empty();
-                    let saved = if untranscribed {
+                Ok((heard, gated, _)) => {
+                    let music = heard.is_none();
+                    let transcript = heard.unwrap_or_default();
+                    // Neither music nor quiet audio was transcribed: delete-after-transcription
+                    // keeps them for QUIET_AUDIO_GRACE_MS (to play, retry, or transcribe anyway).
+                    let untranscribed = music || (gated && transcript.segments.is_empty());
+                    let saved = if music {
+                        shared.store.save_music(job.event_id, &model.model_id)
+                    } else if untranscribed {
                         shared.store.save_untranscribed_quiet(
                             job.event_id,
                             transcript.language.as_deref(),
@@ -1136,8 +1152,9 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                     match saved {
                         Ok(event) => {
                             shared.emit(EngineEvent::EventUpserted(event));
-                            // Quiet audio skipped by the energy gate was never transcribed:
-                            // the housekeeping sweep expires it after QUIET_AUDIO_GRACE_MS.
+                            // Quiet audio skipped by the energy gate, and music, were never
+                            // transcribed: the housekeeping sweep expires them after
+                            // QUIET_AUDIO_GRACE_MS.
                             if !untranscribed
                                 && shared.settings.lock().retention
                                     == Retention::DeleteAfterTranscription
