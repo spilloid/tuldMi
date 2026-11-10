@@ -145,12 +145,33 @@ pub async fn open_data_dir(app: AppHandle, state: State<'_, AppState>) -> Res<()
     app.opener().open_path(state.data_dir.to_string_lossy(), None::<&str>).map_err(err)
 }
 
-/// The `tuldmi-mcp` executable installed next to the app (Tauri `externalBin`), if any.
+/// An executable installed next to the app (Tauri `externalBin`), if present.
+pub fn sidecar(name: &str) -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.parent().map(|dir| dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX))).filter(|p| p.is_file())
+}
+
+/// The `tuldmi-mcp` executable installed next to the app, if any.
 #[tauri::command]
 pub async fn mcp_server_path() -> Res<Option<String>> {
-    let exe = std::env::current_exe().map_err(err)?;
-    let server = exe.parent().map(|dir| dir.join(format!("tuldmi-mcp{}", std::env::consts::EXE_SUFFIX)));
-    Ok(server.filter(|p| p.is_file()).map(|p| p.to_string_lossy().into_owned()))
+    Ok(sidecar("tuldmi-mcp").map(|p| p.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn speaker_models(state: State<'_, AppState>) -> Res<Vec<ModelInfo>> {
+    state.engine.speaker_models().map_err(err)
+}
+
+#[tauri::command]
+pub async fn rename_speaker(state: State<'_, AppState>, id: String, label: String) -> Res<()> {
+    let id = uuid::Uuid::parse_str(&id).map_err(err)?;
+    state.engine.rename_speaker(id, &label).map_err(err)
+}
+
+/// Starts "Separate past recordings"; returns how many events it will look at.
+#[tauri::command]
+pub async fn separate_past_recordings(state: State<'_, AppState>) -> Res<u32> {
+    state.engine.separate_past_recordings().map_err(err)
 }
 
 #[tauri::command]

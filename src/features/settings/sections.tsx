@@ -18,6 +18,7 @@ import { MonitoringNote } from "../shared/MonitoringNote";
 import { useAppVersion } from "../../lib/version";
 import { IN_APP_SHORTCUTS } from "../shortcuts/ShortcutSheet";
 import { Group, Row, SectionHeader } from "./parts";
+import { SpeakersGroup } from "./SpeakersGroup";
 
 /** Save a settings patch, surfacing engine errors as toasts. */
 function usePatch() {
@@ -169,7 +170,8 @@ export function TranscriptionSection() {
         {stats?.freeDiskBytes != null && <span className="text-xs text-faint tnum">{formatBytes(stats.freeDiskBytes)} free on this drive</span>}
       </div>
       <ModelList freeDisk={stats?.freeDiskBytes} />
-      <p className="mt-3 px-0.5 text-sm text-faint">Model licenses differ from tuldMi's MIT license. Each is shown above and listed in the third-party notices.</p>
+      <p className="mb-7 mt-3 px-0.5 text-sm text-faint">Model licenses differ from tuldMi's MIT license. Each is shown above and listed in the third-party notices.</p>
+      <SpeakersGroup />
     </>
   );
 }

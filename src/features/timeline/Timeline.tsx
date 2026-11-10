@@ -1,15 +1,16 @@
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowDown, Loader2 } from "lucide-react";
+import { ArrowDown, Copy, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SpeechEvent } from "../../lib/ipc/types";
 import type { Conversation } from "../../lib/time";
-import { buildTimeline, clock, dayKey, dayLabel, humanDuration } from "../../lib/time";
+import { buildTimeline, clock, dayKey, dayLabel, humanDuration, participants, speakerKeys } from "../../lib/time";
 import { DayIndex } from "./DayIndex";
 import { isTypingTarget, overlayOpen, plain } from "../../lib/keys";
 import { transition, useReducedMotion } from "../../lib/motion";
 import { useStatus, useTimeline } from "../../state/hooks";
 import { useUi } from "../../state/ui";
 import { EventRow } from "./EventRow";
+import { useEventActions } from "./actions";
 import { TimelineEmpty } from "./TimelineEmpty";
 
 const BOTTOM_SLACK = 64;
@@ -31,6 +32,23 @@ export function Timeline({ routeEventId }: { routeEventId?: string }) {
 
   const rows = useMemo(() => buildTimeline(events), [events]);
   const flat = useMemo(() => events.map((e) => e.id), [events]);
+  const actions = useEventActions();
+
+  // Shift+click range: every event between the anchor and the target, in timeline order.
+  const range = useMemo(() => {
+    if (!ui.rangeAnchor || !ui.rangeTo) return null;
+    const a = flat.indexOf(ui.rangeAnchor);
+    const b = flat.indexOf(ui.rangeTo);
+    if (a < 0 || b < 0) return null;
+    return events.slice(Math.min(a, b), Math.max(a, b) + 1);
+  }, [ui.rangeAnchor, ui.rangeTo, flat, events]);
+  const rangeIds = useMemo(() => new Set(range?.map((e) => e.id) ?? []), [range]);
+  const rangeRef = useRef(range);
+  rangeRef.current = range;
+  const copyRange = useCallback(async () => {
+    const r = rangeRef.current;
+    if (r?.length) await actions.copyTranscript(r, r.length === 1 ? "Event" : `${r.length} events`);
+  }, [actions]);
 
   // ---- scroll bookkeeping ------------------------------------------------------------------
 
@@ -143,6 +161,17 @@ export function Timeline({ routeEventId }: { routeEventId?: string }) {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || isTypingTarget(e.target) || overlayOpen()) return;
       const u = uiRef.current;
+      // A range is selected: Ctrl/⌘+C copies it (unless the user selected text), Escape clears.
+      if (rangeRef.current && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "c" && !window.getSelection()?.toString()) {
+        e.preventDefault();
+        void copyRange();
+        return;
+      }
+      if (rangeRef.current && e.key === "Escape") {
+        e.preventDefault();
+        u.clearRange();
+        return;
+      }
       if (plain(e) && (e.key === "j" || e.key === "k")) {
         if (!flat.length) return;
         e.preventDefault();
@@ -159,10 +188,12 @@ export function Timeline({ routeEventId }: { routeEventId?: string }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flat, backToLive]);
 
   const onSelect = useCallback((id: string) => uiRef.current.select(id), []);
   const onToggle = useCallback((id: string) => uiRef.current.toggleExpanded(id), []);
+  const onRange = useCallback((id: string) => uiRef.current.selectRange(id), []);
 
   // ---- render ----------------------------------------------------------------------------
 
@@ -205,11 +236,13 @@ export function Timeline({ routeEventId }: { routeEventId?: string }) {
                 key={row.key}
                 conversation={row.conversation}
                 selectedId={ui.selectedId}
+                rangeIds={rangeIds}
                 expanded={ui.expanded}
                 flashId={ui.flashId}
                 arrived={arrivedIds.current}
                 onSelect={onSelect}
                 onToggle={onToggle}
+                onRange={onRange}
               />
             );
           })}
@@ -218,6 +251,44 @@ export function Timeline({ routeEventId }: { routeEventId?: string }) {
       </div>
 
       <DayIndex events={events} scroller={scroller} />
+
+      <AnimatePresence>
+        {range && range.length > 1 && (
+          <motion.div
+            initial={reduced ? { opacity: 0 } : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduced ? { opacity: 0 } : { opacity: 0, y: 8 }}
+            transition={transition.panel}
+            className="pointer-events-none absolute inset-x-0 bottom-14 z-20 flex justify-center"
+          >
+            <div role="toolbar" aria-label="Selected events" className="pointer-events-auto inline-flex h-9 items-center gap-1 rounded-full border border-line bg-overlay pl-3.5 pr-1 text-sm text-text shadow-2">
+              <span className="tnum font-medium">{range.length} events</span>
+              <span className="text-faint" aria-hidden>·</span>
+              <span className="tnum text-muted">
+                {clock(range[0].startedAt)}–{clock(range[range.length - 1].endedAt)}
+              </span>
+              <button
+                type="button"
+                onClick={() => void copyRange()}
+                className="ml-1.5 inline-flex h-7 items-center gap-1.5 rounded-full bg-accent px-3 font-medium text-on-accent hover:bg-accent-strong"
+              >
+                <Copy size={13} aria-hidden />
+                Copy
+                <span className="kbd !h-[18px] !border-transparent !bg-[color-mix(in_oklch,white,transparent_80%)] !text-[10px] !text-on-accent">{navigator.platform.startsWith("Mac") ? "⌘C" : "Ctrl+C"}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => ui.clearRange()}
+                aria-label="Clear selection"
+                title="Clear selection (Esc)"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-faint hover:bg-hover hover:text-text"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {showPill && (
@@ -289,34 +360,51 @@ function GapRow({ from, to }: { from: number; to: number }) {
 function ConversationBlock({
   conversation: c,
   selectedId,
+  rangeIds,
   expanded,
   flashId,
   arrived,
   onSelect,
   onToggle,
+  onRange,
 }: {
   conversation: Conversation;
   selectedId: string | null;
+  rangeIds: Set<string>;
   expanded: Set<string>;
   flashId: string | null;
   arrived: Set<string>;
   onSelect: (id: string) => void;
   onToggle: (id: string) => void;
+  onRange: (id: string) => void;
 }) {
-  const who = [c.sources.mic ? "Me" : null, c.sources.system ? "Remote" : null].filter(Boolean).join(" & ");
+  const actions = useEventActions();
+  const who = participants(c.events);
+  const whoText = who.length > 1 ? `${who.slice(0, -1).join(", ")} & ${who[who.length - 1]}` : who.join("");
   const dur = c.endedAt - c.startedAt;
+  const copyable = c.events.some((e) => e.segments.some((s) => s.text.trim()));
   return (
-    <section aria-label={`Conversation at ${clock(c.startedAt)}`} className="mb-2">
+    <section aria-label={`Conversation at ${clock(c.startedAt)}`} className="group/conv mb-2">
       <div className="grid grid-cols-[56px_1fr] items-center pb-1 pt-2">
         <span />
-        <div className="flex items-center gap-2 pl-[2px] text-xs text-faint">
+        <div className="flex min-h-6 items-center gap-2 pl-[2px] text-xs text-faint">
           <span className="font-medium text-muted tnum">
             {clock(c.startedAt)}–{clock(c.endedAt)}
           </span>
           <span aria-hidden>·</span>
           <span>{c.events.length === 1 ? humanDuration(dur) : `${humanDuration(dur)}, ${c.events.length} events`}</span>
           <span aria-hidden>·</span>
-          <span>{who}</span>
+          <span className="min-w-0 truncate">{whoText}</span>
+          {copyable && (
+            <button
+              type="button"
+              onClick={() => void actions.copyTranscript(c.events, "Conversation")}
+              className="ml-auto inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-muted opacity-0 transition-opacity hover:bg-hover hover:text-text focus-visible:opacity-100 group-hover/conv:opacity-100"
+            >
+              <Copy size={12} aria-hidden />
+              Copy conversation
+            </button>
+          )}
         </div>
       </div>
       <div className="flex flex-col gap-px">
@@ -326,14 +414,16 @@ function ConversationBlock({
             <EventRow
               key={ev.id}
               ev={ev}
-              showLabel={!prev || prev.source !== ev.source}
+              showLabel={!prev || speakerKeys(prev).last !== speakerKeys(ev).first}
               showTime={!prev || clock(prev.startedAt) !== clock(ev.startedAt)}
               selected={selectedId === ev.id}
+              inRange={rangeIds.has(ev.id)}
               expanded={expanded.has(ev.id)}
               flash={flashId === ev.id}
               arrived={arrived.has(ev.id)}
               onSelect={onSelect}
               onToggle={onToggle}
+              onRange={onRange}
             />
           );
         })}

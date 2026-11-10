@@ -34,6 +34,16 @@ export interface CaptureStatus {
   /** Id of the active transcription model, if one is installed and loaded. */
   modelId: string | null;
   transcriber: TranscriberState;
+  /** Remote speaker separation (docs/design/speakers.md). */
+  separation: SeparationStatus;
+}
+
+export type SeparationState = "off" | "needsModels" | "unavailable" | "ready" | "working";
+
+export interface SeparationStatus {
+  state: SeparationState;
+  /** While "Separate past recordings" runs: system events it still has to look at. */
+  backfillRemaining: number | null;
 }
 
 export type TranscriberState = "noModel" | "loading" | "idle" | "working" | "error";
@@ -63,7 +73,7 @@ export type EventStatus = "queued" | "transcribing" | "done" | "empty" | "failed
 export interface Speaker {
   id: Uuid;
   label: string;
-  /** "self" | "remote" | "person" */
+  /** "self" | "remote" | "person" (a remote speaker separated within one conversation) */
   kind: string;
 }
 
@@ -88,6 +98,8 @@ export interface TranscriptSegment {
   text: string;
   /** 0..=1 when the backend reports it. */
   confidence: number | null;
+  /** A separated remote speaker; null = the event's speaker (Me or Remote). */
+  speaker: Speaker | null;
 }
 
 /** One VAD-delimited span of speech from one source. The timeline's unit. */
@@ -136,6 +148,8 @@ export interface SearchHit {
   at: number;
   snippet: string;
   rank: number;
+  /** Label of the separated remote speaker who said it; null = the source's speaker. */
+  speaker: string | null;
 }
 
 export type Retention = "deleteAfterTranscription" | "days7" | "days30" | "forever";
@@ -183,6 +197,8 @@ export interface Settings {
   theme: Theme;
   /** What AI assistants may read through tuldmi-mcp. Off by default. */
   mcp: McpSettings;
+  /** Separate remote speakers (needs the two speaker models). Off by default. */
+  speakersEnabled: boolean;
 }
 
 export interface McpSettings {
@@ -212,6 +228,7 @@ export const DEFAULT_SETTINGS: Settings = {
   pauseShortcut: "CommandOrControl+Shift+Backquote",
   theme: "system",
   mcp: DEFAULT_MCP,
+  speakersEnabled: false,
 };
 
 export interface ModelInfo {

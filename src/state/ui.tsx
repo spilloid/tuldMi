@@ -9,6 +9,9 @@ interface UiState {
   revealSeq: number;
   paletteOpen: boolean;
   shortcutsOpen: boolean;
+  /** Shift+click range on the timeline: from the anchor event to `rangeTo` (inclusive). */
+  rangeAnchor: string | null;
+  rangeTo: string | null;
 }
 
 interface UiApi extends UiState {
@@ -18,6 +21,9 @@ interface UiApi extends UiState {
   jumpTo(id: string): void;
   setPaletteOpen(v: boolean): void;
   setShortcutsOpen(v: boolean): void;
+  /** Extend a range from the selected event (or `id` itself) to `id`. */
+  selectRange(id: string): void;
+  clearRange(): void;
 }
 
 const Ctx = createContext<UiApi | null>(null);
@@ -30,12 +36,18 @@ export function UiProvider({ children, initial }: { children: ReactNode; initial
     revealSeq: 0,
     paletteOpen: false,
     shortcutsOpen: false,
+    rangeAnchor: null,
+    rangeTo: null,
     ...initial,
   });
 
   const select = useCallback((id: string | null, opts?: { reveal?: boolean }) => {
-    setState((s) => ({ ...s, selectedId: id, revealSeq: opts?.reveal ? s.revealSeq + 1 : s.revealSeq }));
+    setState((s) => ({ ...s, selectedId: id, revealSeq: opts?.reveal ? s.revealSeq + 1 : s.revealSeq, rangeAnchor: null, rangeTo: null }));
   }, []);
+  const selectRange = useCallback((id: string) => {
+    setState((s) => ({ ...s, rangeAnchor: s.rangeAnchor ?? s.selectedId ?? id, rangeTo: id, selectedId: id }));
+  }, []);
+  const clearRange = useCallback(() => setState((s) => (s.rangeAnchor ? { ...s, rangeAnchor: null, rangeTo: null } : s)), []);
   const toggleExpanded = useCallback((id: string, force?: boolean) => {
     setState((s) => {
       const next = new Set(s.expanded);
@@ -57,8 +69,8 @@ export function UiProvider({ children, initial }: { children: ReactNode; initial
   const setShortcutsOpen = useCallback((v: boolean) => setState((s) => ({ ...s, shortcutsOpen: v })), []);
 
   const api = useMemo(
-    () => ({ ...state, select, toggleExpanded, jumpTo, setPaletteOpen, setShortcutsOpen }),
-    [state, select, toggleExpanded, jumpTo, setPaletteOpen, setShortcutsOpen],
+    () => ({ ...state, select, toggleExpanded, jumpTo, setPaletteOpen, setShortcutsOpen, selectRange, clearRange }),
+    [state, select, toggleExpanded, jumpTo, setPaletteOpen, setShortcutsOpen, selectRange, clearRange],
   );
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;
 }

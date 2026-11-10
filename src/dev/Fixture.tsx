@@ -107,8 +107,8 @@ export function Fixture() {
       audio: { assetId: "a", path: url, durationMs: SECONDS * 1000, bytes: samples.length * 2, peaks: peaksOf(samples) },
       audioExpired: false,
       segments: [
-        { id: "g1", eventId: id, startMs: 0, endMs: 3400, text: "Dev fixture: a synthesized test tone, not a recording.", confidence: null },
-        { id: "g2", eventId: id, startMs: 3800, endMs: 9000, text: "Its waveform is computed from the same samples you hear, so scrubbing can be checked end to end.", confidence: null },
+        { id: "g1", eventId: id, startMs: 0, endMs: 3400, text: "Dev fixture: a synthesized test tone, not a recording.", confidence: null, speaker: null },
+        { id: "g2", eventId: id, startMs: 3800, endMs: 9000, text: "Its waveform is computed from the same samples you hear, so scrubbing can be checked end to end.", confidence: null, speaker: null },
       ],
       language: null,
       modelId: null,

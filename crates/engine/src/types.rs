@@ -276,6 +276,8 @@ pub struct SearchHit {
     pub at: i64,
     pub snippet: String,
     pub rank: f64,
+    /// Label of the separated remote speaker who said it; None = the source's speaker.
+    pub speaker: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

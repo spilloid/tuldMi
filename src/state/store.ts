@@ -253,9 +253,11 @@ export class AppStore {
     this.progress.update((all) => ({ ...all, [p.modelId]: p }));
     if (p.state === "done") {
       void this.refreshModels();
-      // Downloading a model with none selected means "use this one".
+      // Downloading a transcription model with none selected means "use this one" (speaker
+      // models download through the same events but are never a transcription model).
       const s = this.settings.get();
-      if (s && !s.modelId) void this.saveSettings({ ...s, modelId: p.modelId }).catch(() => {});
+      const transcription = this.models.get()?.some((m) => m.id === p.modelId);
+      if (s && !s.modelId && transcription) void this.saveSettings({ ...s, modelId: p.modelId }).catch(() => {});
     }
   }
 

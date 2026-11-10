@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { SpeechEvent } from "./ipc/types";
-import { CONVERSATION_GAP_MS, buildTimeline, humanDuration, mediaTime, mergeEvents } from "./time";
+import type { Speaker, SpeechEvent, TranscriptSegment } from "./ipc/types";
+import { CONVERSATION_GAP_MS, buildTimeline, humanDuration, mediaTime, mergeEvents, participants, speakerKeys, speakerRuns, transcriptText } from "./time";
 
 let n = 0;
 function ev(startedAt: number, durMs = 4000, source: "mic" | "system" = "mic"): SpeechEvent {
@@ -102,5 +102,48 @@ describe("durations", () => {
     expect(mediaTime(62_000)).toBe("1:02");
     expect(mediaTime(3_753_000)).toBe("1:02:33");
     expect(mediaTime(-5)).toBe("0:00");
+  });
+});
+
+describe("separated speakers", () => {
+  const person = (id: string, label: string): Speaker => ({ id, label, kind: "person" });
+  const seg = (startMs: number, text: string, speaker: Speaker | null = null): TranscriptSegment => ({
+    id: `g${startMs}`,
+    eventId: "x",
+    startMs,
+    endMs: startMs + 900,
+    text,
+    confidence: null,
+    speaker,
+  });
+  const dana = person("p1", "Dana");
+  const two = person("p2", "Speaker 2");
+  const at = day(9, 14, 2, 11);
+
+  it("groups consecutive segments by speaker, unseparated speech keeps the source label", () => {
+    const e = { ...ev(at, 6000, "system"), segments: [seg(0, "Ship it.", dana), seg(1000, "Friday.", dana), seg(2000, " ", two), seg(3000, "Hm."), seg(4000, "Agreed.", two)] };
+    expect(speakerRuns(e).map((r) => [r.label, r.text, r.startMs])).toEqual([
+      ["Dana", "Ship it. Friday.", 0],
+      ["Remote", "Hm.", 3000],
+      ["Speaker 2", "Agreed.", 4000],
+    ]);
+    expect(speakerKeys(e)).toEqual({ first: "p1", last: "p2" });
+    const plain = { ...ev(at, 1000, "mic"), segments: [seg(0, "Hello.")] };
+    expect(speakerKeys(plain)).toEqual({ first: "mic", last: "mic" });
+  });
+
+  it("lists who took part: Me first, then remote speakers in order", () => {
+    const a = { ...ev(at, 1000, "system"), segments: [seg(0, "One.", two)] };
+    const b = { ...ev(at + 2000, 1000, "mic"), segments: [seg(0, "Two.")] };
+    const c = { ...ev(at + 4000, 1000, "system"), segments: [seg(0, "Three.", dana), seg(500, "Four.")] };
+    expect(participants([a, b, c])).toEqual(["Me", "Speaker 2", "Dana", "Remote"]);
+  });
+
+  it("copies events as one timestamped line per speaker run, in time order", () => {
+    const a = { ...ev(at, 6000, "system"), segments: [seg(0, "Ship it.", dana), seg(2500, "Agreed.", two)] };
+    const b = { ...ev(at + 7000, 1000, "mic"), segments: [seg(0, "Done.")] };
+    expect(transcriptText([b, a])).toBe(
+      ["[2026-10-09 14:02:11] Dana: Ship it.", "[2026-10-09 14:02:13] Speaker 2: Agreed.", "[2026-10-09 14:02:18] Me: Done."].join("\n"),
+    );
   });
 });

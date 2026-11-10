@@ -67,6 +67,12 @@ export interface Backend {
   openDataDir(): Promise<void>;
   /** The installed tuldmi-mcp executable, or null when this build doesn't include it. */
   mcpServerPath(): Promise<string | null>;
+  /** The two models speaker separation needs (download with downloadModel). */
+  speakerModels(): Promise<ModelInfo[]>;
+  /** Rename a separated remote speaker (kind "person"). */
+  renameSpeaker(id: string, label: string): Promise<void>;
+  /** Start "Separate past recordings"; resolves to how many events it will look at. */
+  separatePastRecordings(): Promise<number>;
   exportTranscripts(format: ExportFormat, from: number | null, to: number | null): Promise<string>;
   revealPath(path: string): Promise<void>;
   quitApp(): Promise<void>;

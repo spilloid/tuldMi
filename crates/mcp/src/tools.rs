@@ -335,9 +335,47 @@ fn sources(ceiling: &Ceiling, args: &Value) -> Result<Vec<Source>, String> {
     }
 }
 
+/// The event's text. When tuldMi separated remote speakers, each change of speaker is marked
+/// ("Speaker 1: … Dana: …"), so an assistant can tell who said what.
 fn transcript(event: &SpeechEvent) -> String {
-    let parts: Vec<&str> = event.segments.iter().map(|s| s.text.trim()).filter(|t| !t.is_empty()).collect();
-    parts.join(" ")
+    let separated = event.segments.iter().any(|s| s.speaker.is_some());
+    let mut out = String::new();
+    let mut current: Option<&str> = None;
+    for segment in &event.segments {
+        let text = segment.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        if separated {
+            let label = segment_speaker(segment).unwrap_or("Remote");
+            if current != Some(label) {
+                out.push_str(label);
+                out.push_str(": ");
+                current = Some(label);
+            }
+        }
+        out.push_str(text);
+    }
+    out
+}
+
+/// A separated remote speaker's name, if this segment has one.
+fn segment_speaker(segment: &tuldmi_engine::types::TranscriptSegment) -> Option<&str> {
+    segment.speaker.as_ref().map(|p| p.label.as_str())
+}
+
+/// Separated remote speakers heard in the event, in order of first appearance.
+fn speakers(event: &SpeechEvent) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    for label in event.segments.iter().filter_map(segment_speaker) {
+        if !out.contains(&label) {
+            out.push(label);
+        }
+    }
+    out
 }
 
 /// Cuts `text` to `max` characters; says whether it did.
@@ -355,6 +393,7 @@ fn event_json(event: &SpeechEvent, max_chars: usize) -> Value {
         "seconds": (event.ended_at - event.started_at).max(0) as f64 / 1000.0,
         "status": event.status.as_str(),
         "language": event.language,
+        "speakers": speakers(event),
         "text": text,
         "truncated": truncated,
         "has_audio": event.audio.is_some(),
@@ -384,12 +423,16 @@ fn search(store: &Store, ceiling: &Ceiling, args: &Value, now: chrono::DateTime<
         .filter(|hit| ceiling.admits(hit.source, hit.at))
         .map(|hit| {
             let snippet = hit.snippet.replace([HIGHLIGHT_START, HIGHLIGHT_END], "**");
-            json!({ "event": hit.event_id.to_string(), "source": source_name(hit.source), "at": time_text(hit.at), "snippet": snippet })
+            json!({ "event": hit.event_id.to_string(), "source": source_name(hit.source), "speaker": hit.speaker, "at": time_text(hit.at), "snippet": snippet })
         })
         .collect();
     let mut text = format!("{} match(es).", matches.len());
     for m in &matches {
-        text.push_str(&format!("\n- {} [{}] {} (event {})", m["at"].as_str().unwrap_or(""), m["source"].as_str().unwrap_or(""), m["snippet"].as_str().unwrap_or(""), m["event"].as_str().unwrap_or("")));
+        let who = match m["speaker"].as_str() {
+            Some(speaker) => format!("{}, {speaker}", m["source"].as_str().unwrap_or("")),
+            None => m["source"].as_str().unwrap_or("").to_string(),
+        };
+        text.push_str(&format!("\n- {} [{who}] {} (event {})", m["at"].as_str().unwrap_or(""), m["snippet"].as_str().unwrap_or(""), m["event"].as_str().unwrap_or("")));
     }
     let count = matches.len();
     ok(text, json!({ "matches": matches }), count)
@@ -510,14 +553,17 @@ fn get_event(store: &Store, ceiling: &Ceiling, args: &Value) -> ToolResult {
         let (text, cut_here) = cut(s.text.trim().to_string(), budget);
         budget -= text.chars().count();
         truncated |= cut_here;
-        segments.push(json!({ "at": time_text(event.started_at + s.start_ms), "seconds_into_event": s.start_ms as f64 / 1000.0, "text": text }));
+        segments.push(json!({ "at": time_text(event.started_at + s.start_ms), "seconds_into_event": s.start_ms as f64 / 1000.0, "speaker": segment_speaker(s), "text": text }));
     }
     let mut value = event_json(&event, MAX_EVENT_CHARS);
     value["segments"] = json!(segments);
     value["truncated"] = json!(truncated || value["truncated"].as_bool().unwrap_or(false));
     let mut text = format!("{} [{}], {:.0} s, {}.", time_text(event.started_at), source_name(event.source), value["seconds"].as_f64().unwrap_or(0.0), event.status.as_str());
     for s in &segments {
-        text.push_str(&format!("\n{} {}", s["at"].as_str().unwrap_or(""), s["text"].as_str().unwrap_or("")));
+        match s["speaker"].as_str() {
+            Some(speaker) => text.push_str(&format!("\n{} {speaker}: {}", s["at"].as_str().unwrap_or(""), s["text"].as_str().unwrap_or(""))),
+            None => text.push_str(&format!("\n{} {}", s["at"].as_str().unwrap_or(""), s["text"].as_str().unwrap_or(""))),
+        }
     }
     ok(text, json!({ "event": value }), 1)
 }
@@ -631,6 +677,45 @@ fn pause(server: &McpServer) -> ToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn separated_speakers_are_marked_in_the_text() {
+        use tuldmi_engine::types::{EventStatus, Speaker, TranscriptSegment};
+        let person = |label: &str| Some(Speaker { id: uuid::Uuid::now_v7(), label: label.into(), kind: "person".into() });
+        let segment = |text: &str, speaker: Option<Speaker>| TranscriptSegment {
+            id: uuid::Uuid::now_v7(),
+            event_id: uuid::Uuid::nil(),
+            start_ms: 0,
+            end_ms: 1,
+            text: text.into(),
+            confidence: None,
+            speaker,
+        };
+        let dana = person("Dana");
+        let mut event = SpeechEvent {
+            id: uuid::Uuid::nil(),
+            session_id: uuid::Uuid::nil(),
+            source: Source::System,
+            speaker: None,
+            started_at: 0,
+            ended_at: 1,
+            status: EventStatus::Done,
+            audio: None,
+            audio_expired: false,
+            segments: vec![segment("Ship it.", dana.clone()), segment("Friday.", dana), segment("Hm.", None), segment("Agreed.", person("Speaker 2"))],
+            language: None,
+            model_id: None,
+            error: None,
+        };
+        assert_eq!(transcript(&event), "Dana: Ship it. Friday. Remote: Hm. Speaker 2: Agreed.");
+        assert_eq!(speakers(&event), ["Dana", "Speaker 2"]);
+        // Nothing separated: plain text, as before.
+        for s in &mut event.segments {
+            s.speaker = None;
+        }
+        assert_eq!(transcript(&event), "Ship it. Friday. Hm. Agreed.");
+        assert!(speakers(&event).is_empty());
+    }
 
     #[test]
     fn every_tool_has_annotations_and_object_schemas() {

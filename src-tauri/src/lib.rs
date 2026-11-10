@@ -84,6 +84,9 @@ pub fn run() {
             commands::storage_stats,
             commands::open_data_dir,
             commands::mcp_server_path,
+            commands::speaker_models,
+            commands::rename_speaker,
+            commands::separate_past_recordings,
             commands::export_transcripts,
             commands::reveal_path,
             commands::quit_app,
@@ -202,7 +205,7 @@ fn setup(app: &AppHandle) -> Result<(), String> {
     mac_menu(app).map_err(|e| e.to_string())?;
 
     let sink = Arc::new(events::TauriSink::new(app.clone()));
-    let engine = Engine::start(EngineConfig { data_dir: data_dir.clone(), vad_model_path, suppress_autostart: false, speaker_worker: None }, sink).map_err(|e| e.to_string())?;
+    let engine = Engine::start(EngineConfig { data_dir: data_dir.clone(), vad_model_path, suppress_autostart: false, speaker_worker: commands::sidecar("tuldmi-speakers") }, sink).map_err(|e| e.to_string())?;
     let engine = Arc::new(engine);
     let settings = engine.settings();
     app.manage(AppState { engine: engine.clone(), data_dir, _log_guard: guard });

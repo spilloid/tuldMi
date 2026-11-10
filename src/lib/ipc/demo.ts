@@ -4,6 +4,7 @@ import {
   DEMO_DEVICES,
   DEMO_MODEL_ID,
   DEMO_MODELS,
+  DEMO_SPEAKER_MODELS,
   LIVE_SCRIPT,
   buildDemoEvents,
   makeEvent,
@@ -48,6 +49,7 @@ export class DemoBackend implements Backend {
   private pendingText: Map<string, string[]>;
   private settings: Settings;
   private models: ModelInfo[] = DEMO_MODELS.map((m) => ({ ...m }));
+  private speakerModelList: ModelInfo[] = DEMO_SPEAKER_MODELS.map((m) => ({ ...m }));
   private downloads = new Map<string, ReturnType<typeof setInterval>>();
   private status: CaptureStatus;
   private listeners = new Map<string, Set<(p: unknown) => void>>();
@@ -80,6 +82,7 @@ export class DemoBackend implements Backend {
       backlog: 0,
       modelId: opts.fresh ? null : DEMO_MODEL_ID,
       transcriber: opts.fresh ? "noModel" : "idle",
+      separation: { state: "off", backfillRemaining: null },
     };
     this.recomputeBacklog();
     if (opts.paused && !opts.fresh) {
@@ -92,6 +95,10 @@ export class DemoBackend implements Backend {
 
   private emit<E extends BackendEventName>(event: E, payload: BackendEvents[E]) {
     this.listeners.get(event)?.forEach((h) => h(structuredClone(payload)));
+  }
+
+  private findModel(id: string): ModelInfo | undefined {
+    return this.models.find((x) => x.id === id) ?? this.speakerModelList.find((x) => x.id === id);
   }
 
   private later(ms: number, fn: () => void) {
@@ -278,7 +285,7 @@ export class DemoBackend implements Backend {
   }
 
   async downloadModel(modelId: string) {
-    const m = this.models.find((x) => x.id === modelId);
+    const m = this.findModel(modelId);
     if (!m) throw "Unknown model.";
     if (this.downloads.has(modelId)) return;
     // Demo: no bytes are fetched. Progress is simulated and labelled as demo in the UI.
@@ -305,12 +312,12 @@ export class DemoBackend implements Backend {
     const iv = this.downloads.get(modelId);
     if (iv) clearInterval(iv);
     this.downloads.delete(modelId);
-    const m = this.models.find((x) => x.id === modelId);
+    const m = this.findModel(modelId);
     this.emit("tuldmi://model-progress", { modelId, state: "cancelled", downloaded: 0, total: m?.sizeBytes ?? 0, error: null });
   }
 
   async deleteModel(modelId: string) {
-    const m = this.models.find((x) => x.id === modelId);
+    const m = this.findModel(modelId);
     if (m) m.installed = false;
     if (this.settings.modelId === modelId) {
       this.status = { ...this.status, modelId: null };
@@ -339,6 +346,23 @@ export class DemoBackend implements Backend {
   async mcpServerPath(): Promise<string | null> {
     // Demo mode has no history to serve.
     return null;
+  }
+
+  async speakerModels(): Promise<ModelInfo[]> {
+    return structuredClone(this.speakerModelList);
+  }
+
+  async renameSpeaker(id: string, label: string) {
+    const name = label.trim();
+    if (!name || name.length > 80) throw "Speaker names must be 1 to 80 characters.";
+    for (const ev of this.events) {
+      if (!ev.segments.some((s) => s.speaker?.id === id && s.speaker.kind === "person")) continue;
+      this.upsert({ ...ev, segments: ev.segments.map((s) => (s.speaker?.id === id ? { ...s, speaker: { ...s.speaker, label: name } } : s)) });
+    }
+  }
+
+  async separatePastRecordings(): Promise<number> {
+    throw "Demo mode has no recordings to separate.";
   }
 
   async exportTranscripts(_format: ExportFormat, _from: number | null, _to: number | null): Promise<string> {

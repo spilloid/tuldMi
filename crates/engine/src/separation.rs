@@ -45,6 +45,7 @@ struct Backfill {
 }
 
 /// What a live separation decided, to be saved under the persist gate.
+#[cfg_attr(not(feature = "whisper"), allow(dead_code))]
 pub(super) struct Separated {
     labelled: Vec<Labelled>,
     state: SpeakersState,
@@ -112,10 +113,12 @@ impl Separation {
     }
 
     /// Report a claimed job, in transcription order (both sources).
+    #[cfg_attr(not(feature = "whisper"), allow(dead_code))]
     pub fn observe(&mut self, job: &Job) -> Placement {
         self.live.observe(job.started_at, job.ended_at)
     }
 
+    #[cfg_attr(not(feature = "whisper"), allow(dead_code))]
     /// Separate a transcribed system event. None = save it as before (not a system event,
     /// feature off or not ready, nothing transcribed, or out of conversation order).
     pub fn separate_live(
@@ -152,6 +155,7 @@ impl Separation {
         Some(Separated { labelled: assign::label(&transcript.segments, &transcript.pieces, &spans), state: SpeakersState::Done })
     }
 
+    #[cfg_attr(not(feature = "whisper"), allow(dead_code))]
     /// Save a separated transcript (call under the persist gate). Falls back to a plain save,
     /// marked failed, if the labelled save fails, so speakers never cost a transcript.
     /// Returns the saved event and other events whose segments were relabelled.
