@@ -249,7 +249,7 @@ export function RecordingSection() {
 // ---- Retention -------------------------------------------------------------------------------
 
 const RETENTION: { value: Retention; title: string; detail: string }[] = [
-  { value: "deleteAfterTranscription", title: "Delete after transcription", detail: "Audio is removed as soon as its transcript is ready; clips too quiet to transcribe are removed after 24 hours. Smallest footprint; no playback." },
+  { value: "deleteAfterTranscription", title: "Delete after transcription", detail: "Audio is removed as soon as its transcript is ready; clips too quiet to transcribe, and music, are removed after 24 hours (until then, music can still be transcribed anyway). Smallest footprint; no playback." },
   { value: "days7", title: "Keep for 7 days", detail: "Replay the past week, then audio is removed." },
   { value: "days30", title: "Keep for 30 days", detail: "A month of playback. A good balance for most people." },
   { value: "forever", title: "Keep indefinitely", detail: "Audio stays until you delete it. Uses the most disk over time." },

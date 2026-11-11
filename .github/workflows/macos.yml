@@ -90,6 +90,10 @@ jobs:
           test -f "$app/Contents/Resources/ggml-silero-v6.2.0.bin"
           test -f "$app/Contents/Resources/ced-tiny-audioset.int8.onnx"
           test -f "$app/Contents/Resources/audioset-labels.csv"
+          # Third-party license texts ship with the app (Apache-2.0 §4, MIT, BSD).
+          for f in README.txt THIRD_PARTY_NOTICES.md Apache-2.0.txt onnxruntime-ThirdPartyNotices.txt whisper.cpp-LICENSE.txt; do
+            test -s "$app/Contents/Resources/licenses/$f"
+          done
           exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")"
           lipo -archs "$exe" | grep -qx arm64
           # tuldmi-mcp finds the app as its sibling `tuldmi`, and must run on its own.
@@ -121,6 +125,20 @@ jobs:
           if tail -n +2 dist/macos-linked-libraries.txt | grep -v -E '^\s+(/System/Library/|/usr/lib/)'; then
             echo "non-system library linked"; exit 1
           fi
+          # Launch the bundled app for real: setup must run (it builds the main window itself;
+          # a config that lets Tauri build it too fails setup and the app exits at once).
+          "$exe" > launch.log 2>&1 &
+          pid=$!
+          started=""
+          for _ in $(seq 1 30); do
+            sleep 1
+            kill -0 "$pid" 2>/dev/null || { echo "tuldMi exited during startup:"; cat launch.log; exit 1; }
+            if grep -qs "tuldMi starting" "$HOME/Library/Application Support/com.spillerstech.tuldmi/logs/"tuldmi.log*; then started=1; break; fi
+          done
+          test -n "$started" || { echo "tuldMi never logged its start:"; cat launch.log; exit 1; }
+          sleep 5
+          kill -0 "$pid" 2>/dev/null || { echo "tuldMi exited after starting:"; cat launch.log; exit 1; }
+          kill "$pid"; wait "$pid" 2>/dev/null || true
           hdiutil verify "$dmg"
           cp "$dmg" dist/
           (cd dist && shasum -a 256 "tuldMi_${v}_aarch64.dmg" > "tuldMi_${v}_aarch64.dmg.sha256" && cat ./*.sha256)

@@ -345,6 +345,7 @@ function MusicBody({ ev }: { ev: SpeechEvent }) {
     <div className="flex items-center gap-2 py-0.5 text-base text-faint">
       <Music size={14} aria-hidden />
       <span className="italic">Music · {humanDuration(ev.endedAt - ev.startedAt)}</span>
+      {!ev.audio && ev.audioExpired && <span title="Its audio was removed by your retention setting, so it can't be transcribed now">· audio removed</span>}
       {ev.audio && (
         <button
           type="button"

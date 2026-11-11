@@ -186,8 +186,11 @@ function main() {
 
 tuldMi is released under the MIT License (see [LICENSE](LICENSE)). The third-party
 components listed below are distributed under their own licenses, which are
-reproduced or referenced by the upstream projects linked here. Model weights
-downloaded by the app are not covered by this file; see [docs/MODELS.md](docs/MODELS.md).
+reproduced or referenced by the upstream projects linked here. The license texts
+of the native libraries and shipped models are in
+[src-tauri/licenses/](src-tauri/licenses/README.txt), and the installed app carries
+them, with this file, in its \`licenses\` folder. Model weights downloaded by the app
+are not covered by this file; see [docs/MODELS.md](docs/MODELS.md).
 
 ## Native libraries
 

@@ -97,7 +97,10 @@ people you're using tuldMi, or pause it.
 On by default (Settings → Transcription → *Skip music*). A small sound classifier that ships with
 tuldMi (CED-tiny, run by `tuldmi-speakers`) scores each stretch of audio on your computer; music
 without speech is kept as a collapsed Music row and not transcribed. Nothing is downloaded or
-sent anywhere, and the audio itself is kept or deleted exactly as your retention setting says.
+sent anywhere. The audio follows your retention setting, with one exception: under *Delete after
+transcription*, a music clip's audio is kept for 24 hours after it was judged music (like a clip
+too quiet to transcribe), so that **Transcribe anyway** can still fix a mistake. After that the
+audio is removed and the row can no longer be transcribed.
 
 ## Speaker separation
 

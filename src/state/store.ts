@@ -1,5 +1,5 @@
 import type { Backend } from "../lib/ipc/backend";
-import { errorMessage } from "../lib/ipc/backend";
+import { compareEvents, errorMessage } from "../lib/ipc/backend";
 import type {
   CaptureStatus,
   LevelFrame,
@@ -161,26 +161,34 @@ export class AppStore {
     this.timeline.update((t) => ({ ...t, loading: true, error: null }));
     try {
       const page = await this.backend.listEvents(null, PAGE);
+      const hasMore = page.length >= PAGE;
+      if (page.length > 0) this.boundary = page[page.length - 1];
+      const boundary = this.boundary;
       this.timeline.update((t) => ({
         ...t,
-        events: mergeEvents(t.events, page),
+        // Updates that arrived before this page and lie below it wait for their own page.
+        events: mergeEvents(hasMore && boundary ? t.events.filter((e) => compareEvents(e, boundary) >= 0) : t.events, page),
         loading: false,
-        hasMore: page.length >= PAGE,
+        hasMore,
       }));
     } catch (e) {
       this.timeline.update((t) => ({ ...t, loading: false, error: errorMessage(e) }));
     }
   }
 
+  /** The oldest event of the pages loaded so far: where the next page starts. Kept apart from
+   *  the list, which live updates also add to, so paging never skips history. */
+  private boundary: Pick<SpeechEvent, "startedAt" | "id"> | null = null;
   private loadingOlder = false;
   async loadOlder() {
     const t = this.timeline.get();
-    if (this.loadingOlder || !t.hasMore || t.events.length === 0) return;
+    const oldest = this.boundary;
+    if (this.loadingOlder || !t.hasMore || !oldest) return;
     this.loadingOlder = true;
     this.timeline.set({ ...t, loading: true });
     try {
-      const oldest = t.events[0];
       const page = await this.backend.listEvents({ before: oldest.startedAt, beforeId: oldest.id }, PAGE);
+      if (page.length > 0) this.boundary = page[page.length - 1];
       this.timeline.update((cur) => ({
         ...cur,
         events: mergeEvents(cur.events, page),
@@ -204,7 +212,7 @@ export class AppStore {
     let guard = 0;
     while (guard++ < 50) {
       const t = this.timeline.get();
-      if (!t.hasMore || t.events.length === 0 || t.events[0].startedAt <= ev.startedAt) break;
+      if (!t.hasMore || !this.boundary || compareEvents(this.boundary, ev) <= 0) break;
       await this.loadOlder();
     }
     this.timeline.update((t) => ({ ...t, events: mergeEvents(t.events, [ev]) }));
@@ -214,6 +222,12 @@ export class AppStore {
   private onUpsert(ev: SpeechEvent) {
     this.timeline.update((t) => {
       const isNew = !t.events.some((e) => e.id === ev.id);
+      // An update to history not paged in yet (speaker backfill, Transcribe anyway, a retry)
+      // must not join the list: the next page starts below the oldest loaded event, so
+      // everything between would be skipped, and a range or conversation copy would miss it.
+      // It shows, current, when that history is paged in.
+      const boundary = this.boundary;
+      if (isNew && t.hasMore && boundary && compareEvents(ev, boundary) < 0) return t;
       return {
         ...t,
         events: mergeEvents(t.events, [ev]),
