@@ -29,6 +29,8 @@ no-TTS static libraries (no espeak-ng or other text-to-speech code):
 - simple-sentencepiece: Apache-2.0, https://github.com/pkufool/simple-sentencepiece
 - hclust-cpp (fastcluster): BSD-2-Clause, https://github.com/csukuangfj/hclust-cpp
 - Darts-clone (via simple-sentencepiece): BSD-2-Clause, https://github.com/s-yata/darts-clone
+- Eigen: MPL-2.0, https://eigen.tuxfamily.org (text in ONNX Runtime's ThirdPartyNotices.txt)
+- nlohmann/json: MIT, https://github.com/nlohmann/json (text in ONNX Runtime's ThirdPartyNotices.txt)
 - KISS FFT: BSD-3-Clause, https://github.com/mborgerding/kissfft
 
 ## Rust crates (616)

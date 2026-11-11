@@ -178,6 +178,9 @@ export class AppStore {
   private older: Promise<void> | null = null;
   /** The first page failed: nothing to anchor to, so live updates show rather than wait. */
   private initialFailed = false;
+  /** When this start began: with no page to anchor to, only speech from about then on is shown
+   *  live (older history still waits, so a retried first page places it without a hole). */
+  private startedAt = Date.now();
 
   private resetTimeline() {
     this.boundary = null;
@@ -187,6 +190,7 @@ export class AppStore {
     this.initial = null;
     this.older = null;
     this.initialFailed = false;
+    this.startedAt = Date.now();
     this.timeline.set({ events: [], loading: true, hasMore: true, error: null, arrivals: [] });
   }
 
@@ -221,7 +225,7 @@ export class AppStore {
       if (epoch !== this.epoch) return;
       this.initialFailed = !this.boundary;
       // No page to anchor to: show what arrived live rather than hold it with nothing to wait for.
-      const live = this.boundary ? [] : this.takeHeld(() => true);
+      const live = this.boundary ? [] : this.takeHeld((ev) => this.isLive(ev));
       this.timeline.update((t) => ({ ...t, events: mergeEvents(t.events, live), loading: false, error: errorMessage(e) }));
     }
   }
@@ -262,7 +266,9 @@ export class AppStore {
   loadOlder(): Promise<void> {
     if (this.older) return this.older;
     const oldest = this.boundary;
-    if (!this.more || !oldest) return Promise.resolve();
+    // No first page yet (it failed): scrolling up retries it.
+    if (!oldest) return this.more && !this.initial ? this.loadInitial() : Promise.resolve();
+    if (!this.more) return Promise.resolve();
     const epoch = this.epoch;
     let run!: Promise<void>;
     run = (async () => {
@@ -319,9 +325,14 @@ export class AppStore {
     return find();
   }
 
+  /** Speech from this start on (with a margin for an utterance already under way). */
+  private isLive(ev: SpeechEvent) {
+    return ev.startedAt >= this.startedAt - 10 * 60_000;
+  }
+
   private onUpsert(ev: SpeechEvent) {
     // Below the loaded pages, or before the first page is in: hold it until its page is.
-    const waiting = this.boundary ? compareEvents(ev, this.boundary) < 0 : !this.initialFailed;
+    const waiting = this.boundary ? compareEvents(ev, this.boundary) < 0 : !(this.initialFailed && this.isLive(ev));
     if (this.more && waiting && !this.timeline.get().events.some((e) => e.id === ev.id)) {
       // (Before the first page this includes new live speech; that page releases it at once.)
       this.held.set(ev.id, ev);

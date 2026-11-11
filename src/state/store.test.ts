@@ -68,7 +68,6 @@ async function started(count: number) {
   await store.start();
   // start() kicks off the first page without awaiting it.
   await store.loadInitial();
-  store.stop();
   return { store, ...fake };
 }
 
@@ -222,7 +221,7 @@ describe("races with notifications", () => {
     const store = new AppStore(fake.backend);
     await store.start();
     await store.loadInitial();
-    const live = ev(301);
+    const live = { ...ev(301), startedAt: Date.now(), endedAt: Date.now() + 4_000 };
     fake.events.push(live);
     fake.announce(live);
     expect(store.timeline.get().events.map((e) => e.id)).toEqual([live.id]);
@@ -245,9 +244,34 @@ describe("races with notifications", () => {
     for (let i = 301; i <= 500; i++) fake.events.push(ev(i));
     await store.start();
     await store.loadInitial();
-    await store.loadOlder();
-    store.stop();
+    // Straight after the new first page: nothing kept from before the stop.
     contiguous(store, fake.events);
+    expect(store.timeline.get().events).toHaveLength(100);
     expect(store.timeline.get().events.at(-1)?.id).toBe(ev(500).id);
+    store.stop();
+  });
+});
+
+describe("first page failed", () => {
+  it("an update to old history waits, and the retry places it without a hole", async () => {
+    const fake = fakeBackend(300);
+    fake.control.fail = true;
+    const store = new AppStore(fake.backend);
+    await store.start();
+    await store.loadInitial();
+    // Old history (recorded long before this start) finishes in the background…
+    const old = { ...fake.events[10], status: "empty" } as SpeechEvent;
+    fake.events[10] = old;
+    fake.announce(old);
+    expect(store.timeline.get().events).toHaveLength(0);
+    // …then scrolling up retries the first page once the backend is back.
+    fake.control.fail = false;
+    await store.loadOlder();
+    expect(store.timeline.get().events.some((e) => e.id === old.id)).toBe(false);
+    contiguous(store, fake.events);
+    while (store.timeline.get().hasMore) await store.loadOlder();
+    expect(store.timeline.get().events.find((e) => e.id === old.id)?.status).toBe("empty");
+    contiguous(store, fake.events);
+    store.stop();
   });
 });
