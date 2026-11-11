@@ -28,6 +28,7 @@ no-TTS static libraries (no espeak-ng or other text-to-speech code):
 - OpenFst (via kaldifst): Apache-2.0, https://www.openfst.org
 - simple-sentencepiece: Apache-2.0, https://github.com/pkufool/simple-sentencepiece
 - hclust-cpp (fastcluster): BSD-2-Clause, https://github.com/csukuangfj/hclust-cpp
+- Darts-clone (via simple-sentencepiece): BSD-2-Clause, https://github.com/s-yata/darts-clone
 - KISS FFT: BSD-3-Clause, https://github.com/mborgerding/kissfft
 
 ## Rust crates (616)

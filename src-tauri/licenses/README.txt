@@ -25,6 +25,7 @@ kaldi-decoder                    Apache-2.0     Apache-2.0.txt
 kaldifst / OpenFst               Apache-2.0     kaldifst-and-OpenFst-LICENSE.txt
 simple-sentencepiece             Apache-2.0     Apache-2.0.txt
 hclust-cpp (fastcluster)         BSD-2-Clause   hclust-cpp-LICENSE.txt
+Darts-clone                      BSD-2-Clause   darts-clone-LICENSE.txt
 KISS FFT                         BSD-3-Clause   kissfft-LICENSE.txt
 Rust crates, npm packages        (various)      third-party-licenses.txt
 

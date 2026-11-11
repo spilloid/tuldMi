@@ -26,13 +26,15 @@ function ev(i: number): SpeechEvent {
 function fakeBackend(count: number) {
   const events = Array.from({ length: count }, (_, i) => ev(i + 1));
   let upsert: ((e: SpeechEvent) => void) | null = null;
+  let remove: ((id: string) => void) | null = null;
   /** When set, each page request waits for this before answering (from the data at answer time
    *  or, with `snapshot`, at request time). */
-  const control: { gate: Promise<void> | null; snapshot: boolean } = { gate: null, snapshot: false };
+  const control: { gate: Promise<void> | null; snapshot: boolean; fail: boolean } = { gate: null, snapshot: false, fail: false };
   const backend = {
     async listEvents(cursor: EventCursor | null, limit: number) {
       const taken = control.snapshot ? [...events] : null;
       if (control.gate) await control.gate;
+      if (control.fail) throw new Error("offline");
       return (taken ?? events)
         .filter((e) => !cursor || compareEvents(e, { startedAt: cursor.before, id: cursor.beforeId }) < 0)
         .sort((a, b) => compareEvents(b, a))
@@ -43,6 +45,7 @@ function fakeBackend(count: number) {
     },
     on(name: string, handler: (payload: unknown) => void) {
       if (name === "tuldmi://event-upserted") upsert = handler as (e: SpeechEvent) => void;
+      if (name === "tuldmi://event-deleted") remove = handler as (id: string) => void;
       return () => {};
     },
     async getStatus() {
@@ -54,6 +57,7 @@ function fakeBackend(count: number) {
     async listModels() {
       return [];
     },
+    emitDelete: (id: string) => remove?.(id),
   } as unknown as Backend;
   return { backend, events, control, announce: (e: SpeechEvent) => upsert?.(e) };
 }
@@ -173,5 +177,77 @@ describe("history stored late", () => {
     expect(t.hasMore).toBe(false);
     expect(t.events[0].id).toBe(late.id);
     expect(t.events).toHaveLength(151);
+  });
+});
+
+describe("races with notifications", () => {
+  it("a jump never replaces a newer version with its older snapshot", async () => {
+    const { store, events, control, announce } = await started(300);
+    const target = events[50];
+    const hold = deferred();
+    control.gate = hold.gate;
+    const jump = store.ensureLoaded(target.id);
+    await Promise.resolve();
+    // While paging, the target is updated (speaker backfill finished it).
+    const newer = { ...target, status: "empty" } as SpeechEvent;
+    announce(newer);
+    control.gate = null;
+    hold.open();
+    const ev = await jump;
+    expect(ev?.status).toBe("empty");
+    expect(store.timeline.get().events.find((e) => e.id === target.id)?.status).toBe("empty");
+  });
+
+  it("an event deleted while its page is on the way stays deleted", async () => {
+    const fake = fakeBackend(300);
+    const store = new AppStore(fake.backend);
+    await store.start();
+    await store.loadInitial();
+    const hold = deferred();
+    fake.control.gate = hold.gate;
+    fake.control.snapshot = true;
+    const older = store.loadOlder();
+    const victim = fake.events[150];
+    fake.events.splice(150, 1);
+    (fake.backend as unknown as { emitDelete: (id: string) => void }).emitDelete(victim.id);
+    hold.open();
+    await older;
+    store.stop();
+    expect(store.timeline.get().events.some((e) => e.id === victim.id)).toBe(false);
+  });
+
+  it("if the first page fails, live speech still shows and a jump shows no island", async () => {
+    const fake = fakeBackend(300);
+    fake.control.fail = true;
+    const store = new AppStore(fake.backend);
+    await store.start();
+    await store.loadInitial();
+    const live = ev(301);
+    fake.events.push(live);
+    fake.announce(live);
+    expect(store.timeline.get().events.map((e) => e.id)).toEqual([live.id]);
+    expect(await store.ensureLoaded(fake.events[0].id)).toBeNull();
+    expect(store.timeline.get().events.map((e) => e.id)).toEqual([live.id]);
+    // Back online: the retry fills in from the newest page down.
+    fake.control.fail = false;
+    expect((await store.ensureLoaded(fake.events[0].id))?.id).toBe(fake.events[0].id);
+    store.stop();
+    contiguous(store, fake.events);
+  });
+
+  it("start after stop re-reads the timeline instead of keeping a stale copy", async () => {
+    const fake = fakeBackend(300);
+    const store = new AppStore(fake.backend);
+    await store.start();
+    await store.loadInitial();
+    store.stop();
+    // Missed while stopped.
+    for (let i = 301; i <= 500; i++) fake.events.push(ev(i));
+    await store.start();
+    await store.loadInitial();
+    await store.loadOlder();
+    store.stop();
+    contiguous(store, fake.events);
+    expect(store.timeline.get().events.at(-1)?.id).toBe(ev(500).id);
   });
 });

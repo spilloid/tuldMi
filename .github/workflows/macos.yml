@@ -91,7 +91,7 @@ jobs:
           test -f "$app/Contents/Resources/ced-tiny-audioset.int8.onnx"
           test -f "$app/Contents/Resources/audioset-labels.csv"
           # Third-party license texts ship with the app (Apache-2.0 §4, MIT, BSD).
-          for f in README.txt THIRD_PARTY_NOTICES.md third-party-licenses.txt Apache-2.0.txt onnxruntime-ThirdPartyNotices.txt hclust-cpp-LICENSE.txt whisper.cpp-LICENSE.txt; do
+          for f in README.txt THIRD_PARTY_NOTICES.md third-party-licenses.txt Apache-2.0.txt onnxruntime-ThirdPartyNotices.txt hclust-cpp-LICENSE.txt darts-clone-LICENSE.txt whisper.cpp-LICENSE.txt; do
             test -s "$app/Contents/Resources/licenses/$f"
           done
           exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")"
