@@ -5333,7 +5333,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tuldmi"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "parking_lot",
  "serde",
@@ -5354,7 +5354,7 @@ dependencies = [
 
 [[package]]
 name = "tuldmi-engine"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "cpal",
@@ -5384,7 +5384,7 @@ dependencies = [
 
 [[package]]
 name = "tuldmi-mcp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5398,7 +5398,7 @@ dependencies = [
 
 [[package]]
 name = "tuldmi-speakers"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "hound",
  "parking_lot",
