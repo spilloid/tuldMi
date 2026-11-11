@@ -9,7 +9,7 @@ import { isTypingTarget, overlayOpen, plain } from "../../lib/keys";
 import { transition, useReducedMotion } from "../../lib/motion";
 import { useBackend, useStatus, useTimeline } from "../../state/hooks";
 import { useUi } from "../../state/ui";
-import { EventRow, isMusic } from "./EventRow";
+import { EventRow, MusicKept, isMusic } from "./EventRow";
 import { useEventActions } from "./actions";
 import { TimelineEmpty } from "./TimelineEmpty";
 
@@ -494,6 +494,7 @@ function MusicRun({ events, render, reveal }: { events: SpeechEvent[]; render: (
               Music · {humanDuration(span)} · {events.length} clips
             </span>
           </button>
+          {withAudio.length > 0 && <MusicKept />}
           {withAudio.length > 0 && (
             <button
               type="button"

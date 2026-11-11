@@ -26,9 +26,14 @@ function ev(i: number): SpeechEvent {
 function fakeBackend(count: number) {
   const events = Array.from({ length: count }, (_, i) => ev(i + 1));
   let upsert: ((e: SpeechEvent) => void) | null = null;
+  /** When set, each page request waits for this before answering (from the data at answer time
+   *  or, with `snapshot`, at request time). */
+  const control: { gate: Promise<void> | null; snapshot: boolean } = { gate: null, snapshot: false };
   const backend = {
     async listEvents(cursor: EventCursor | null, limit: number) {
-      return events
+      const taken = control.snapshot ? [...events] : null;
+      if (control.gate) await control.gate;
+      return (taken ?? events)
         .filter((e) => !cursor || compareEvents(e, { startedAt: cursor.before, id: cursor.beforeId }) < 0)
         .sort((a, b) => compareEvents(b, a))
         .slice(0, limit);
@@ -50,7 +55,7 @@ function fakeBackend(count: number) {
       return [];
     },
   } as unknown as Backend;
-  return { backend, events, announce: (e: SpeechEvent) => upsert?.(e) };
+  return { backend, events, control, announce: (e: SpeechEvent) => upsert?.(e) };
 }
 
 async function started(count: number) {
@@ -95,5 +100,78 @@ describe("timeline paging with updates to older history", () => {
     expect(store.timeline.get().hasMore).toBe(false);
     announce({ ...events[0], status: "empty" });
     expect(store.timeline.get().events[0].status).toBe("empty");
+  });
+});
+
+function deferred() {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  return { gate, open };
+}
+
+function contiguous(store: AppStore, events: SpeechEvent[]) {
+  const shown = store.timeline.get().events.map((e) => e.id);
+  const first = events.findIndex((e) => e.id === shown[0]);
+  expect(shown).toEqual(events.slice(first).map((e) => e.id));
+}
+
+describe("navigation to an old event", () => {
+  it("pages all the way back, however far, with no hole", async () => {
+    const { store, events } = await started(6000);
+    const ev = await store.ensureLoaded(events[0].id);
+    expect(ev?.id).toBe(events[0].id);
+    expect(store.timeline.get().events).toHaveLength(6000);
+    contiguous(store, events);
+  });
+
+  it("shares a page already being loaded instead of skipping ahead", async () => {
+    const { store, events } = await started(1000);
+    const scrolling = store.loadOlder();
+    const ev = await store.ensureLoaded(events[0].id);
+    await scrolling;
+    expect(ev?.id).toBe(events[0].id);
+    expect(store.timeline.get().events).toHaveLength(1000);
+    contiguous(store, events);
+  });
+
+  it("a search jump during the first page keeps its target", async () => {
+    const fake = fakeBackend(300);
+    const store = new AppStore(fake.backend);
+    const hold = deferred();
+    fake.control.gate = hold.gate;
+    const initial = store.loadInitial();
+    const jump = store.ensureLoaded(fake.events[0].id);
+    fake.control.gate = null;
+    hold.open();
+    await initial;
+    const ev = await jump;
+    expect(ev?.id).toBe(fake.events[0].id);
+    expect(store.timeline.get().events.some((e) => e.id === fake.events[0].id)).toBe(true);
+    contiguous(store, fake.events);
+  });
+});
+
+describe("history stored late", () => {
+  it("an older clip stored while the last page is in flight still shows", async () => {
+    const fake = fakeBackend(150);
+    const store = new AppStore(fake.backend);
+    await store.start();
+    await store.loadInitial();
+    store.stop();
+    // The last page answers from what was stored when it was asked for…
+    const hold = deferred();
+    fake.control.gate = hold.gate;
+    fake.control.snapshot = true;
+    const last = store.loadOlder();
+    // …and meanwhile an older clip is stored and announced (a clock stepped back, say).
+    const late = { ...ev(0), id: "e0000-late", startedAt: fake.events[0].startedAt - 5_000 };
+    fake.events.unshift(late);
+    fake.announce(late);
+    hold.open();
+    await last;
+    const t = store.timeline.get();
+    expect(t.hasMore).toBe(false);
+    expect(t.events[0].id).toBe(late.id);
+    expect(t.events).toHaveLength(151);
   });
 });

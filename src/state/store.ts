@@ -130,9 +130,10 @@ export class AppStore {
       b.on("tuldmi://status", (s) => this.status.set(s)),
       b.on("tuldmi://levels", (f) => this.levels.push(f)),
       b.on("tuldmi://event-upserted", (ev) => this.onUpsert(ev)),
-      b.on("tuldmi://event-deleted", (id) =>
-        this.timeline.update((t) => ({ ...t, events: t.events.filter((e) => e.id !== id) })),
-      ),
+      b.on("tuldmi://event-deleted", (id) => {
+        this.held.delete(id);
+        this.timeline.update((t) => ({ ...t, events: t.events.filter((e) => e.id !== id) }));
+      }),
       b.on("tuldmi://model-progress", (p) => this.onProgress(p)),
     );
     // Levels can stop without a final frame; decay the summary so "speaking" doesn't stick.
@@ -157,19 +158,21 @@ export class AppStore {
 
   // ---- timeline ----------------------------------------------------------------------------
 
-  async loadInitial() {
+  /** The first page, once asked for: navigation waits for it, so it never races the page. */
+  private initial: Promise<void> | null = null;
+  loadInitial(): Promise<void> {
+    this.initial = this.fetchInitial();
+    return this.initial;
+  }
+  private async fetchInitial() {
     this.timeline.update((t) => ({ ...t, loading: true, error: null }));
     try {
       const page = await this.backend.listEvents(null, PAGE);
-      const hasMore = page.length >= PAGE;
-      if (page.length > 0) this.boundary = page[page.length - 1];
-      const boundary = this.boundary;
+      this.paged(page);
       this.timeline.update((t) => ({
         ...t,
-        // Updates that arrived before this page and lie below it wait for their own page.
-        events: mergeEvents(hasMore && boundary ? t.events.filter((e) => compareEvents(e, boundary) >= 0) : t.events, page),
+        events: this.release(mergeEvents(t.events, page)),
         loading: false,
-        hasMore,
       }));
     } catch (e) {
       this.timeline.update((t) => ({ ...t, loading: false, error: errorMessage(e) }));
@@ -177,57 +180,92 @@ export class AppStore {
   }
 
   /** The oldest event of the pages loaded so far: where the next page starts. Kept apart from
-   *  the list, which live updates also add to, so paging never skips history. */
+   *  the list, which live updates and navigation also add to, so paging never skips history. */
   private boundary: Pick<SpeechEvent, "startedAt" | "id"> | null = null;
-  private loadingOlder = false;
-  async loadOlder() {
-    const t = this.timeline.get();
-    const oldest = this.boundary;
-    if (this.loadingOlder || !t.hasMore || !oldest) return;
-    this.loadingOlder = true;
-    this.timeline.set({ ...t, loading: true });
-    try {
-      const page = await this.backend.listEvents({ before: oldest.startedAt, beforeId: oldest.id }, PAGE);
-      if (page.length > 0) this.boundary = page[page.length - 1];
-      this.timeline.update((cur) => ({
-        ...cur,
-        events: mergeEvents(cur.events, page),
-        loading: false,
-        hasMore: page.length >= PAGE,
-      }));
-    } catch (e) {
-      this.timeline.update((cur) => ({ ...cur, loading: false, error: errorMessage(e) }));
-    } finally {
-      this.loadingOlder = false;
+  /** Whether history continues below `boundary` (mirrored in the timeline state). */
+  private more = true;
+  /** Updates to history below the pages loaded so far (speaker backfill, Transcribe anyway, a
+   *  retry, a late-stored clip), newest version per id. Shown as soon as their page is in, so
+   *  the list stays contiguous and a range or conversation copy never silently misses events. */
+  private held = new Map<string, SpeechEvent>();
+
+  private paged(page: SpeechEvent[]) {
+    if (page.length > 0) this.boundary = page[page.length - 1];
+    this.more = page.length >= PAGE;
+    this.timeline.update((t) => ({ ...t, hasMore: this.more }));
+  }
+
+  /** `events` plus every held update now within the loaded pages (all of them at the end).
+   *  Held versions came from notifications, so they are at least as new as a page's copy. */
+  private release(events: SpeechEvent[]): SpeechEvent[] {
+    const due: SpeechEvent[] = [];
+    for (const [id, ev] of this.held) {
+      if (!this.more || (this.boundary && compareEvents(ev, this.boundary) >= 0)) {
+        due.push(ev);
+        this.held.delete(id);
+      }
     }
+    return due.length ? mergeEvents(events, due) : events;
+  }
+
+  private older: Promise<void> | null = null;
+  /** Load the next page of history. Concurrent calls share the one in flight. */
+  loadOlder(): Promise<void> {
+    if (this.older) return this.older;
+    const oldest = this.boundary;
+    if (!this.more || !oldest) return Promise.resolve();
+    this.older = (async () => {
+      this.timeline.update((t) => ({ ...t, loading: true }));
+      try {
+        const page = await this.backend.listEvents({ before: oldest.startedAt, beforeId: oldest.id }, PAGE);
+        this.paged(page);
+        this.timeline.update((cur) => ({
+          ...cur,
+          events: this.release(mergeEvents(cur.events, page)),
+          loading: false,
+        }));
+      } catch (e) {
+        // The boundary stays put, which is how a caller paging in a loop sees it failed.
+        this.timeline.update((cur) => ({ ...cur, loading: false, error: errorMessage(e) }));
+      } finally {
+        this.older = null;
+      }
+    })();
+    return this.older;
   }
 
   /** Ensure an event (e.g. a search hit) is loaded, paging back until it is. */
   async ensureLoaded(id: string): Promise<SpeechEvent | null> {
+    if (this.initial) await this.initial;
     const have = this.timeline.get().events.find((e) => e.id === id);
     if (have) return have;
     const ev = await this.backend.getEvent(id);
     if (!ev) return null;
-    // Load everything between the target and what we have, so the timeline stays contiguous.
-    let guard = 0;
-    while (guard++ < 50) {
-      const t = this.timeline.get();
-      if (!t.hasMore || !this.boundary || compareEvents(this.boundary, ev) <= 0) break;
+    // Load everything between the target and what we have, so the timeline stays contiguous
+    // (every page, however far back: a range copy must never have a hole in it).
+    while (this.more && this.boundary && compareEvents(this.boundary, ev) > 0) {
+      const before = this.boundary;
       await this.loadOlder();
+      if (this.boundary === before) break;
+    }
+    if (this.more && this.boundary && compareEvents(ev, this.boundary) < 0) {
+      // Couldn't reach it (a page failed): show it once its page is in, not as an island.
+      this.held.set(ev.id, ev);
+      return null;
     }
     this.timeline.update((t) => ({ ...t, events: mergeEvents(t.events, [ev]) }));
-    return ev;
+    return this.timeline.get().events.find((e) => e.id === ev.id) ?? ev;
   }
 
   private onUpsert(ev: SpeechEvent) {
+    // Below the loaded pages (or before the first page is in): hold it until its page is.
+    if (this.more && (!this.boundary || compareEvents(ev, this.boundary) < 0) && !this.timeline.get().events.some((e) => e.id === ev.id)) {
+      // (Before the first page this includes new live speech; that page releases it at once.)
+      this.held.set(ev.id, ev);
+      return;
+    }
     this.timeline.update((t) => {
       const isNew = !t.events.some((e) => e.id === ev.id);
-      // An update to history not paged in yet (speaker backfill, Transcribe anyway, a retry)
-      // must not join the list: the next page starts below the oldest loaded event, so
-      // everything between would be skipped, and a range or conversation copy would miss it.
-      // It shows, current, when that history is paged in.
-      const boundary = this.boundary;
-      if (isNew && t.hasMore && boundary && compareEvents(ev, boundary) < 0) return t;
       return {
         ...t,
         events: mergeEvents(t.events, [ev]),

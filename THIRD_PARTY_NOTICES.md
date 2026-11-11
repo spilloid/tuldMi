@@ -26,7 +26,8 @@ no-TTS static libraries (no espeak-ng or other text-to-speech code):
 - kaldi-native-fbank: Apache-2.0, https://github.com/csukuangfj/kaldi-native-fbank
 - kaldi-decoder: Apache-2.0, https://github.com/k2-fsa/kaldi-decoder
 - OpenFst (via kaldifst): Apache-2.0, https://www.openfst.org
-- ssentencepiece: Apache-2.0, https://github.com/k2-fsa/ssentencepiece
+- simple-sentencepiece: Apache-2.0, https://github.com/pkufool/simple-sentencepiece
+- hclust-cpp (fastcluster): BSD-2-Clause, https://github.com/csukuangfj/hclust-cpp
 - KISS FFT: BSD-3-Clause, https://github.com/mborgerding/kissfft
 
 ## Rust crates (616)

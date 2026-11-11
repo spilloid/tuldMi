@@ -4,8 +4,10 @@ tuldMi third-party licenses
 tuldMi itself is MIT-licensed (LICENSE in the source repository,
 https://github.com/spilloid/tuldMi). It ships the third-party components
 below, each under its own license. This folder holds those license texts.
-THIRD_PARTY_NOTICES.md, beside it, lists every compiled-in Rust crate with
-its license and repository.
+THIRD_PARTY_NOTICES.md, beside it, lists every compiled-in Rust crate and
+bundled npm package with its license and repository, and
+third-party-licenses.txt holds the license, copyright and notice files those
+packages publish.
 
 Component                        License        Text in this folder
 -------------------------------  -------------  ---------------------------------
@@ -22,7 +24,9 @@ kaldi-native-fbank               Apache-2.0     Apache-2.0.txt
 kaldi-decoder                    Apache-2.0     Apache-2.0.txt
 kaldifst / OpenFst               Apache-2.0     kaldifst-and-OpenFst-LICENSE.txt
 simple-sentencepiece             Apache-2.0     Apache-2.0.txt
+hclust-cpp (fastcluster)         BSD-2-Clause   hclust-cpp-LICENSE.txt
 KISS FFT                         BSD-3-Clause   kissfft-LICENSE.txt
+Rust crates, npm packages        (various)      third-party-licenses.txt
 
 Shipped models:
 
