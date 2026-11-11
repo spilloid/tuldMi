@@ -2,7 +2,7 @@
 
 All notable changes to tuldMi are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] — 2026-11-10
 
 ### Added
 
@@ -129,6 +129,7 @@ First release. Windows 10/11 x64.
   devices; a settings save can wait up to 5 s during a large retention sweep; rare out-of-order
   status publish between engine threads.
 
+[0.4.0]: https://github.com/spilloid/tuldMi/releases/tag/v0.4.0
 [0.3.0]: https://github.com/spilloid/tuldMi/releases/tag/v0.3.0
 [0.2.0]: https://github.com/spilloid/tuldMi/releases/tag/v0.2.0
 [0.1.1]: https://github.com/spilloid/tuldMi/releases/tag/v0.1.1
