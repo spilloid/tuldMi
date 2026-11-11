@@ -29,6 +29,8 @@ Thanks for helping. tuldMi handles people's conversations, so two rules outrank 
 
 ```
 npm install
+node scripts/sherpa-libs.mjs   # once: pinned, hash-checked sherpa-onnx libraries (speaker worker)
+cargo build -p tuldmi-speakers # speaker separation in dev: the app looks for it next to itself
 npm run tauri dev        # app with hot-reloading frontend
 npm run dev              # frontend only, in a browser, on labelled demo data (?demo)
 ```
@@ -40,6 +42,12 @@ cargo test -p tuldmi-engine
 cargo clippy --workspace --all-targets -- -D warnings
 npm run typecheck && npx vitest run && npm run build
 ```
+
+The speaker worker's end-to-end test needs the two speaker models and a multi-speaker recording:
+`TULDMI_SPEAKER_MODELS=<dir> TULDMI_SPEAKER_WAV=<wav> cargo test -p tuldmi-speakers --test backfill`.
+`cargo run --release -p tuldmi-speakers --example evaluate` scores separation against reference
+speaker times (e.g. AMI meetings); `cargo run --release -p tuldmi-engine --example speakers_live`
+runs the whole live pipeline on a recording.
 
 Engine tests that need real Whisper weights are opt-in:
 `TULDMI_TEST_MODEL=path\to\ggml-tiny.en.bin cargo test -p tuldmi-engine --test engine -- --ignored`.

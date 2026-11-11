@@ -7,6 +7,8 @@ src/ (React + TypeScript, Vite)          the product surface; never touches devi
   └── IPC: Tauri commands + events (docs/IPC.md)
 src-tauri/ (Tauri 2 shell)               window, tray, global shortcut, autostart, command glue
   └── tuldmi-engine (crates/engine)      everything that captures, decides, stores, transcribes
+        └── tuldmi-speakers (crates/speakers)  child process: who spoke when (sherpa-onnx)
+tuldmi-mcp (crates/mcp)                  separate stdio program for AI assistants, read-only
 ```
 
 The engine has no Tauri dependency and is tested on its own (`cargo test -p tuldmi-engine`).
@@ -29,9 +31,12 @@ The engine has no Tauri dependency and is tested on its own (`cargo test -p tuld
                                      └─► Store::insert_event (event + asset + queued job, one txn)
                                            └─► EventUpserted ──► UI; wake ASR
  tuldmi-asr                               [one thread]
-   Store::next_job ─► read_ogg_opus_16k ─► WhisperProvider::transcribe ─► save_transcript
+   Store::next_job ─► read_ogg_opus_16k ─► WhisperProvider::transcribe
+   ─► (system event, separation on) samples ─► tuldmi-speakers ─► conversation tracker ─►
+       split segments by speaker (docs/design/speakers.md) ─► save_transcript(_with_speakers)
    ─► (retention = delete-after-transcription ⇒ expire audio, unless the energy gate
        skipped inference: that audio was never transcribed and is kept) ─► EventUpserted
+   idle: "Separate past recordings", one stored system event at a time
  tuldmi-house                             [one thread]
    retention sweep (start, every 10 min, and on a retention settings change; one bounded
    SQL update), orphan sweep (start), device recovery + default-device following (every 3 s)
@@ -82,8 +87,9 @@ external-content index `transcript_fts` kept in sync by triggers), `transcriptio
 Design choices that matter for a long-lived memory database:
 
 - **Source ≠ speaker.** `audio_events.source` (mic/system) is a capture fact; `speaker_id` is an
-  identity claim. Today mic ⇒ "Me" (`self`) and system ⇒ "Remote" (`remote`); a future
-  diarizer or manual naming adds `person` speakers with optional embeddings, without migration.
+  identity claim. Mic ⇒ "Me" (`self`) and system ⇒ "Remote" (`remote`). Speaker separation
+  (schema 3) labels individual segments with `person` speakers ("Speaker 1", renamable), one set
+  per conversation; `speakers.embedding` is never written (voices are matched in memory only).
 - **Transcripts outlive audio.** Retention expires `audio_assets` (path nulled, `expired_at` set)
   and never touches transcripts. Audio still waiting for transcription is never expired.
 - **Crash safety.** Every mutation is a single transaction; audio files are written atomically

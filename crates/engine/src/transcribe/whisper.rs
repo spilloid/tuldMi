@@ -1,6 +1,6 @@
 //! CPU whisper.cpp backend; all printing of recognized content is disabled.
 use super::{Transcript, TranscriptionProvider};
-use crate::{Error, Result, storage::NewSegment};
+use crate::{Error, Result, speakers::assign::Piece, storage::NewSegment};
 use std::path::Path;
 use std::sync::{
     Arc,
@@ -50,6 +50,7 @@ impl TranscriptionProvider for WhisperProvider {
         if super::below_energy_gate(samples) {
             return Ok(Transcript {
                 segments: Vec::new(),
+                pieces: Vec::new(),
                 language: language.map(str::to_owned),
             });
         }
@@ -67,6 +68,9 @@ impl TranscriptionProvider for WhisperProvider {
         params.set_print_timestamps(false);
         params.set_print_special(false);
         params.set_suppress_nst(true);
+        // Per-token times let speaker separation split a segment where the voice changes.
+        // Computed after decoding; the recognized text is unchanged.
+        params.set_token_timestamps(true);
         let cancel = self.cancel.clone();
         // whisper-rs 0.16's closure helper boxes a trait object but its trampoline
         // casts that allocation to F, which can spuriously abort inference. Use
@@ -90,7 +94,9 @@ impl TranscriptionProvider for WhisperProvider {
             .full(params, samples)
             .map_err(|e| Error::Transcription(e.to_string()))?;
         let duration = samples.len() as i64 / 16;
+        let eot = self.context.token_eot();
         let mut segments = Vec::new();
+        let mut pieces = Vec::new();
         for segment in state.as_iter() {
             let text = segment
                 .to_str_lossy()
@@ -123,15 +129,29 @@ impl TranscriptionProvider for WhisperProvider {
                 .collect();
             let confidence = (!probs.is_empty())
                 .then(|| (probs.iter().sum::<f32>() / probs.len() as f32).clamp(0.0, 1.0));
+            pieces.push(
+                (0..segment.n_tokens())
+                    .filter_map(|i| segment.get_token(i))
+                    .filter(|t| t.token_id() < eot)
+                    .filter_map(|t| {
+                        let data = t.token_data();
+                        let start = (data.t0 * 10).clamp(start_ms, end_ms);
+                        let end = (data.t1 * 10).clamp(start, end_ms);
+                        Some(Piece { start_ms: start, end_ms: end, bytes: t.to_bytes().ok()?.to_vec() })
+                    })
+                    .collect(),
+            );
             segments.push(NewSegment {
                 start_ms,
                 end_ms,
                 text,
                 confidence,
+                speaker_id: None,
             });
         }
         Ok(Transcript {
             segments,
+            pieces,
             language: whisper_rs::get_lang_str(state.full_lang_id_from_state()).map(str::to_owned),
         })
     }

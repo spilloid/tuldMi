@@ -62,7 +62,7 @@ export function searchEvents(events: SpeechEvent[], q: SearchQuery): SearchHit[]
       const exact = words.filter((w) => terms.includes(w)).length;
       // FTS5 convention: lower rank = better.
       const rank = -(matches + exact * 0.5) / Math.sqrt(words.length + 4);
-      hits.push({ eventId: ev.id, segmentId: seg.id, source: ev.source, at, snippet, rank });
+      hits.push({ eventId: ev.id, segmentId: seg.id, source: ev.source, at, snippet, rank, speaker: seg.speaker?.label ?? null });
     }
   }
   hits.sort((a, b) => a.rank - b.rank || b.at - a.at);

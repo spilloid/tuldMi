@@ -125,6 +125,7 @@ fn transcript_failure_rolls_back_segments_fts_and_status() -> Result<()> {
         end_ms: 20,
         text: "original words".into(),
         confidence: None,
+        speaker_id: None,
     };
     let original = store.save_transcript(event.id, &[segment], Some("en"), "model")?;
     store.connection.lock().execute_batch(
@@ -137,12 +138,14 @@ fn transcript_failure_rolls_back_segments_fts_and_status() -> Result<()> {
             end_ms: 10,
             text: "replacement".into(),
             confidence: None,
+            speaker_id: None,
         },
         NewSegment {
             start_ms: 10,
             end_ms: 20,
             text: "reject".into(),
             confidence: None,
+            speaker_id: None,
         },
     ];
     assert!(
@@ -234,12 +237,14 @@ fn search_sanitizes_tokens_and_obeys_event_dates_offsets_and_limits() -> Result<
                     end_ms: 80,
                     text: "budget Thursday".into(),
                     confidence: None,
+                    speaker_id: None,
                 },
                 NewSegment {
                     start_ms: 20,
                     end_ms: 30,
                     text: "other".into(),
                     confidence: None,
+                    speaker_id: None,
                 },
             ],
             None,
@@ -313,6 +318,7 @@ fn deletion_cascades_fts_and_preserves_settings_models_and_speakers() -> Result<
             end_ms: 10,
             text: "words".into(),
             confidence: None,
+            speaker_id: None,
         }],
         None,
         "m",
@@ -414,8 +420,8 @@ fn read_only_store_reads_filters_and_never_writes() -> Result<()> {
         ended_at: 2_100,
         audio: None,
     })?;
-    store.save_transcript(me.id, &[NewSegment { start_ms: 0, end_ms: 100, text: "send the deck".into(), confidence: None }], Some("en"), "tiny")?;
-    store.save_transcript(remote.id, &[NewSegment { start_ms: 0, end_ms: 100, text: "the deck is late".into(), confidence: None }], Some("en"), "tiny")?;
+    store.save_transcript(me.id, &[NewSegment { start_ms: 0, end_ms: 100, text: "send the deck".into(), confidence: None , speaker_id: None}], Some("en"), "tiny")?;
+    store.save_transcript(remote.id, &[NewSegment { start_ms: 0, end_ms: 100, text: "the deck is late".into(), confidence: None , speaker_id: None}], Some("en"), "tiny")?;
 
     let reader = Store::open_read_only(directory.path())?;
     let all = |sources: Vec<Source>, from: Option<i64>| EventFilter { from, to: None, sources, newest_first: true, limit: 10 };
@@ -482,11 +488,11 @@ fn time_ordered_search_ignores_excluded_transcripts() -> Result<()> {
         let session = store.start_session(0)?;
         let a = insert(&store, &session, 1_000, None)?;
         let b = insert(&store, &session, 2_000, None)?;
-        store.save_transcript(a.id, &[NewSegment { start_ms: 0, end_ms: 1, text: "alpha alpha beta".into(), confidence: None }], None, "m")?;
-        store.save_transcript(b.id, &[NewSegment { start_ms: 0, end_ms: 1, text: "alpha beta beta".into(), confidence: None }], None, "m")?;
+        store.save_transcript(a.id, &[NewSegment { start_ms: 0, end_ms: 1, text: "alpha alpha beta".into(), confidence: None , speaker_id: None}], None, "m")?;
+        store.save_transcript(b.id, &[NewSegment { start_ms: 0, end_ms: 1, text: "alpha beta beta".into(), confidence: None , speaker_id: None}], None, "m")?;
         for at in [3_000, 4_000, 5_000] {
             let event = store.insert_event(&NewEvent { session_id: session.id, source: Source::System, started_at: at, ended_at: at + 1, audio: None })?;
-            store.save_transcript(event.id, &[NewSegment { start_ms: 0, end_ms: 1, text: hidden.into(), confidence: None }], None, "m")?;
+            store.save_transcript(event.id, &[NewSegment { start_ms: 0, end_ms: 1, text: hidden.into(), confidence: None , speaker_id: None}], None, "m")?;
         }
         let query = SearchQuery { text: "alpha beta".into(), sources: vec![Source::Mic], from: None, to: None, limit: Some(1) };
         // Compare by time: ids differ between the two databases.
@@ -494,5 +500,197 @@ fn time_ordered_search_ignores_excluded_transcripts() -> Result<()> {
     };
     assert_eq!(visible("alpha alpha alpha alpha beta")?, vec![2_000], "the newest visible match");
     assert_eq!(visible("alpha alpha alpha alpha beta")?, visible("beta beta beta beta alpha")?);
+    Ok(())
+}
+
+// ---- remote speakers (docs/design/speakers.md) ------------------------------------------------
+
+fn noon() -> i64 {
+    crate::speakers::tracker::local_day_start(chrono::Local::now().timestamp_millis()) + 12 * 3_600_000
+}
+
+fn event_at(store: &Store, session: &Session, source: Source, start: i64, end: i64) -> Result<SpeechEvent> {
+    store.insert_event(&NewEvent { session_id: session.id, source, started_at: start, ended_at: end, audio: None })
+}
+
+fn segment(text: &str, speaker: Option<Uuid>) -> NewSegment {
+    NewSegment { start_ms: 0, end_ms: 50, text: text.into(), confidence: None, speaker_id: speaker }
+}
+
+#[test]
+fn conversation_bounds_follow_long_events_that_bridge_gaps() -> Result<()> {
+    let (_dir, store) = setup()?;
+    let session = store.start_session(0)?;
+    let t0 = noon();
+    // A spans five minutes; B sits inside it; C starts just after A ends. One conversation.
+    event_at(&store, &session, Source::System, t0, t0 + 300_000)?;
+    event_at(&store, &session, Source::Mic, t0 + 1_000, t0 + 2_000)?;
+    event_at(&store, &session, Source::System, t0 + 300_001, t0 + 310_000)?;
+    assert_eq!(store.conversation_bounds(t0 + 300_001)?, (t0, t0 + 300_001));
+    // From inside, the whole conversation counts, later events included (a retry of B).
+    assert_eq!(store.conversation_bounds(t0 + 1_000)?, (t0, t0 + 300_001));
+    // Exactly the gap after the latest end starts a new conversation (the timeline's rule).
+    let gap = crate::speakers::tracker::CONVERSATION_GAP_MS;
+    event_at(&store, &session, Source::System, t0 + 310_000 + gap, t0 + 320_000 + gap)?;
+    assert_eq!(store.conversation_bounds(t0 + 310_000 + gap)?, (t0 + 310_000 + gap, t0 + 310_000 + gap));
+    assert_eq!(store.conversation_bounds(t0 + 300_001)?, (t0, t0 + 300_001), "the next conversation isn't included");
+    Ok(())
+}
+
+#[test]
+fn speaker_numbers_stay_within_their_conversation_and_are_never_reused() -> Result<()> {
+    let (_dir, store) = setup()?;
+    let session = store.start_session(0)?;
+    let t0 = noon();
+    let morning = event_at(&store, &session, Source::System, t0 - 3_600_000, t0 - 3_590_000)?;
+    let afternoon = event_at(&store, &session, Source::System, t0, t0 + 10_000)?;
+    let two = store.create_person_speaker("Speaker 2", 2, t0 - 3_600_000)?;
+    let four = store.create_person_speaker("Speaker 4", 4, t0)?;
+    store.save_transcript_with_speakers(afternoon.id, &[segment("a", Some(four.id))], None, "m", SpeakersState::Done)?;
+    store.save_transcript_with_speakers(morning.id, &[segment("b", Some(two.id))], None, "m", SpeakersState::Done)?;
+    // The morning conversation only counts its own speakers, not the afternoon's.
+    assert_eq!(store.max_speaker_ordinal(t0 - 3_600_000, t0 - 3_590_000)?, 2);
+    // A renamed speaker keeps its number; "Speaker 1" being gone doesn't make 2 reusable.
+    store.rename_speaker(two.id, "Dana")?;
+    assert_eq!(store.max_speaker_ordinal(t0 - 3_600_000, t0 - 3_590_000)?, 2);
+    assert_eq!(store.max_speaker_ordinal(t0, t0 + 10_000)?, 4);
+    // Deleting the event that showed Speaker 4 doesn't free the number.
+    store.delete_event(afternoon.id)?;
+    assert_eq!(store.max_speaker_ordinal(t0, t0 + 10_000)?, 4);
+    Ok(())
+}
+
+#[test]
+fn a_backfill_save_leaves_events_separated_meanwhile_alone() -> Result<()> {
+    let (_dir, store) = setup()?;
+    let session = store.start_session(0)?;
+    let t0 = noon();
+    let open = event_at(&store, &session, Source::System, t0, t0 + 1_000)?;
+    let taken = event_at(&store, &session, Source::System, t0 + 2_000, t0 + 3_000)?;
+    let (_, open_ids) = store.save_transcript_with_speakers(open.id, &[segment("x", None)], None, "m", SpeakersState::Done)
+?;
+    // `open` stays unseparated for the test: reset its state the way the backfill finds it.
+    store.connection.lock().execute("UPDATE audio_events SET speakers_state = NULL WHERE id = ?1", [open.id.to_string()])?;
+    let live = store.create_person_speaker("Speaker 1", 1, t0 + 2_000)?;
+    let (_, taken_ids) = store.save_transcript_with_speakers(taken.id, &[segment("y", Some(live.id))], None, "m", SpeakersState::Done)?;
+
+    let new = Uuid::now_v7();
+    let unused = Uuid::now_v7();
+    let touched = store.save_backfill(
+        &[(new, "Speaker 1".into(), 1, t0), (unused, "Speaker 2".into(), 2, t0)],
+        &[(open_ids[0], new), (taken_ids[0], new)],
+        &[(open.id, SpeakersState::Done), (taken.id, SpeakersState::Done)],
+    )?;
+    assert_eq!(touched, vec![open.id]);
+    let open = store.get_event(open.id)?.unwrap();
+    assert_eq!(open.segments[0].speaker.as_ref().map(|s| s.id), Some(new));
+    // The live-separated event keeps its own speaker.
+    let taken = store.get_event(taken.id)?.unwrap();
+    assert_eq!(taken.segments[0].speaker.as_ref().map(|s| s.id), Some(live.id));
+    // A speaker nothing shows isn't kept.
+    let kept: i64 = store.connection.lock().query_row("SELECT COUNT(*) FROM speakers WHERE id = ?1", [unused.to_string()], |r| r.get(0))?;
+    assert_eq!(kept, 0);
+    Ok(())
+}
+
+#[test]
+fn orphaned_speakers_lose_their_name_but_keep_their_number() -> Result<()> {
+    let (_dir, store) = setup()?;
+    let session = store.start_session(0)?;
+    let t0 = noon();
+    let a = event_at(&store, &session, Source::System, t0, t0 + 1_000)?;
+    let b = event_at(&store, &session, Source::System, t0 + 2_000, t0 + 3_000)?;
+    // Backfilled in A+B: Speaker 2 first shown in A, still shown in B.
+    let two = store.create_person_speaker("Speaker 2", 2, t0)?;
+    store.rename_speaker(two.id, "Dana")?;
+    store.save_transcript_with_speakers(a.id, &[segment("a", Some(two.id))], None, "m", SpeakersState::Done)?;
+    store.save_transcript_with_speakers(b.id, &[segment("b", Some(two.id))], None, "m", SpeakersState::Done)?;
+    store.delete_event(a.id)?;
+    // A is gone, so the conversation now starts at B, after Speaker 2's first-shown time: it
+    // still counts through B's segment.
+    assert_eq!(store.conversation_bounds(t0 + 2_000)?, (t0 + 2_000, t0 + 2_000));
+    assert_eq!(store.max_speaker_ordinal(t0 + 2_000, t0 + 2_000)?, 2);
+    // Once nothing shows Dana, the typed name goes; the number stays reserved.
+    store.delete_event(b.id)?;
+    assert_eq!(store.forget_orphan_speaker_names(i64::MAX)?, 1);
+    let label: String = store.connection.lock().query_row("SELECT label FROM speakers WHERE id = ?1", [two.id.to_string()], |r| r.get(0))?;
+    assert_eq!(label, "Speaker 2");
+    assert_eq!(store.max_speaker_ordinal(t0, t0 + 3_000)?, 2);
+    Ok(())
+}
+
+// ---- music rejection ----------------------------------------------------------------------
+
+#[test]
+fn music_is_kept_like_quiet_audio_and_can_be_transcribed_anyway() -> Result<()> {
+    let (directory, store) = setup()?;
+    let session = store.start_session(0)?;
+    let path = directory.path().join("audio").join("song.ogg");
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    std::fs::write(&path, b"OggS")?;
+    let event = insert(&store, &session, 1_000, Some(audio(path.clone())))?;
+    let job = store.next_job()?.unwrap();
+    assert!(!job.transcribe_anyway);
+    let saved = store.save_music(event.id, "m")?;
+    assert_eq!(saved.status, EventStatus::Empty);
+    assert_eq!(saved.error.as_deref(), Some(MUSIC_NOTE));
+    assert!(saved.segments.is_empty());
+    // Delete-after-transcription: music, never transcribed, gets the quiet grace period.
+    assert!(store.expire_audio_events_before(i64::MAX, 0)?.is_empty());
+    assert!(store.get_event(event.id)?.unwrap().audio.is_some());
+    // "Transcribe anyway": requeued, and the next job skips the music check.
+    assert!(store.transcribe_anyway(event.id)?);
+    let again = store.get_event(event.id)?.unwrap();
+    assert_eq!((again.status, again.error), (EventStatus::Queued, None));
+    let job = store.next_job()?.unwrap();
+    assert!(job.transcribe_anyway);
+    // Only music can be transcribed anyway.
+    assert!(!store.transcribe_anyway(event.id)?, "it's transcribing now, not music");
+    Ok(())
+}
+
+#[test]
+fn a_deleted_conversation_start_never_frees_its_speaker_numbers() -> Result<()> {
+    let (_dir, store) = setup()?;
+    let session = store.start_session(0)?;
+    let t0 = noon();
+    // Speaker 1, then Speaker 2, then Speaker 1 again; the prefix with every Speaker 2 is deleted.
+    let a = event_at(&store, &session, Source::System, t0, t0 + 1_000)?;
+    let b = event_at(&store, &session, Source::System, t0 + 2_000, t0 + 3_000)?;
+    let c = event_at(&store, &session, Source::System, t0 + 4_000, t0 + 5_000)?;
+    let one = store.create_person_speaker("Speaker 1", 1, t0)?;
+    let two = store.create_person_speaker("Speaker 2", 2, t0 + 2_000)?;
+    store.save_transcript_with_speakers(a.id, &[segment("a", Some(one.id))], None, "m", SpeakersState::Done)?;
+    store.save_transcript_with_speakers(b.id, &[segment("b", Some(two.id))], None, "m", SpeakersState::Done)?;
+    store.save_transcript_with_speakers(c.id, &[segment("c", Some(one.id))], None, "m", SpeakersState::Done)?;
+    store.delete_event(a.id)?;
+    store.delete_event(b.id)?;
+    let (first, last) = store.conversation_bounds(t0 + 4_000)?;
+    assert_eq!(first, t0 + 4_000);
+    assert_eq!(store.conversation_max_ordinal(first, last)?, 2, "Speaker 2 stays reserved");
+    // An earlier conversation that still exists keeps its own numbers out.
+    let morning = event_at(&store, &session, Source::System, t0 - 3_600_000, t0 - 3_590_000)?;
+    let five = store.create_person_speaker("Speaker 5", 5, t0 - 3_600_000)?;
+    store.save_transcript_with_speakers(morning.id, &[segment("m", Some(five.id))], None, "m", SpeakersState::Done)?;
+    assert_eq!(store.conversation_max_ordinal(first, last)?, 2);
+    Ok(())
+}
+
+#[test]
+fn music_judged_late_still_gets_its_grace() -> Result<()> {
+    let (directory, store) = setup()?;
+    let session = store.start_session(0)?;
+    let path = directory.path().join("audio").join("old-song.ogg");
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    std::fs::write(&path, b"OggS")?;
+    // Recorded long ago (waited in a backlog), judged music just now.
+    let event = insert(&store, &session, 1_000, Some(audio(path)))?;
+    store.next_job()?;
+    store.save_music(event.id, "m")?;
+    // Delete-after-transcription: quiet cutoff is "a day ago", everything else expires.
+    let day_ago = now_ms() - QUIET_AUDIO_GRACE_MS;
+    assert!(store.expire_audio_events_before(i64::MAX, day_ago)?.is_empty(), "judged moments ago: kept");
+    // Age-based retention still goes by the recording.
+    assert_eq!(store.expire_audio_events_before(2_000, 2_000)?.len(), 1);
     Ok(())
 }

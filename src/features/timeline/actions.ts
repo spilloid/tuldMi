@@ -1,18 +1,14 @@
 import { useCallback } from "react";
 import { errorMessage } from "../../lib/ipc/backend";
 import type { SpeechEvent } from "../../lib/ipc/types";
-import { clockSeconds, eventText, sourceLabel } from "../../lib/time";
+import { eventText, transcriptText } from "../../lib/time";
 import { useBackend, useStore } from "../../state/hooks";
 import { useConfirm } from "../../components/ui/Confirm";
 import { useToast } from "../../components/ui/Toast";
 
-function stamp(t: number) {
-  const d = new Date(t);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${clockSeconds(t)}`;
-}
-
+/** One event as "[time] Speaker: text" lines (one per speaker run). */
 export function textWithTimestamp(ev: SpeechEvent): string {
-  return `[${stamp(ev.startedAt)}] ${sourceLabel(ev)}: ${eventText(ev)}`;
+  return transcriptText([ev]);
 }
 
 export function useEventActions() {
@@ -36,6 +32,16 @@ export function useEventActions() {
   return {
     copyText: (ev: SpeechEvent) => copy(eventText(ev), "Text"),
     copyWithTimestamp: (ev: SpeechEvent) => copy(textWithTimestamp(ev), "Text with timestamp"),
+    /** Several events (a range or a whole conversation) as timestamped transcript lines. */
+    copyTranscript: (events: SpeechEvent[], what: string) => copy(transcriptText(events), what),
+    transcribeAnyway: async (ev: SpeechEvent) => {
+      try {
+        const ok = await backend.transcribeAnyway(ev.id);
+        if (!ok) toast.show({ level: "warning", message: "This recording's audio is gone, so it can't be transcribed." });
+      } catch (e) {
+        toast.show({ level: "error", title: "Couldn't transcribe", message: errorMessage(e) });
+      }
+    },
     retry: async (ev: SpeechEvent) => {
       try {
         const ok = await backend.retryEvent(ev.id);

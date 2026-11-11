@@ -1,0 +1,25 @@
+[package]
+name = "tuldmi-speakers"
+description = "tuldMi's speaker-separation worker: sherpa-onnx in its own process (it can _Exit), driven over stdin/stdout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "tuldmi-speakers"
+path = "src/main.rs"
+
+# The wire protocol lives in the engine (speakers::protocol); no transcription backend here.
+[dependencies]
+tuldmi-engine = { workspace = true, default-features = false }
+# Static prebuilt libraries, fetched and hash-checked by scripts/sherpa-libs.mjs (see
+# .cargo/config.toml SHERPA_ONNX_LIB_DIR). Keep the version in step with that script.
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["static"] }
+
+[dev-dependencies]
+hound = "3"
+uuid.workspace = true
+tempfile = "3"
+parking_lot = "0.12"
+rusqlite = { version = "0.40", features = ["bundled"] }

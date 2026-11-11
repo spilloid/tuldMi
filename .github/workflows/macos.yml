@@ -64,11 +64,13 @@ jobs:
       - run: npx vitest run
       # The shell embeds the built frontend at compile time.
       - run: npm run build
+      # sherpa-onnx's pinned, hash-checked no-TTS libraries (SHERPA_ONNX_LIB_DIR) for tuldmi-speakers.
+      - run: node scripts/sherpa-libs.mjs
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - run: cargo test --locked -p tuldmi-engine -p tuldmi -p tuldmi-mcp
-      - name: Bundle (app + dmg, ad-hoc signed, with tuldmi-mcp)
+      - run: cargo test --locked -p tuldmi-engine -p tuldmi -p tuldmi-mcp -p tuldmi-speakers
+      - name: Bundle (app + dmg, ad-hoc signed, with tuldmi-mcp and tuldmi-speakers)
         run: |
-          node scripts/build-mcp.mjs aarch64-apple-darwin
+          node scripts/build-sidecars.mjs aarch64-apple-darwin
           npx tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.bundle.conf.json
       - name: Verify bundle
         run: |
@@ -86,6 +88,8 @@ jobs:
           test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = 15.4
           test "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")" = "$v"
           test -f "$app/Contents/Resources/ggml-silero-v6.2.0.bin"
+          test -f "$app/Contents/Resources/ced-tiny-audioset.int8.onnx"
+          test -f "$app/Contents/Resources/audioset-labels.csv"
           exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")"
           lipo -archs "$exe" | grep -qx arm64
           # tuldmi-mcp finds the app as its sibling `tuldmi`, and must run on its own.
@@ -97,6 +101,18 @@ jobs:
           test "$("$mcp" --version)" = "tuldmi-mcp $v"
           if otool -L "$mcp" | tail -n +2 | grep -v -E '^\s+(/System/Library/|/usr/lib/)'; then
             echo "tuldmi-mcp links a non-system library"; exit 1
+          fi
+          # The speaker worker (sherpa-onnx, statically linked, no TTS/espeak-ng).
+          spk="$app/Contents/MacOS/tuldmi-speakers"
+          test -x "$spk"
+          lipo -archs "$spk" | grep -qx arm64
+          codesign --verify --strict --verbose=2 "$spk"
+          test "$("$spk" --version)" = "tuldmi-speakers $v"
+          if otool -L "$spk" | tail -n +2 | grep -v -E '^\s+(/System/Library/|/usr/lib/)'; then
+            echo "tuldmi-speakers links a non-system library"; exit 1
+          fi
+          if nm "$spk" 2>/dev/null | grep -q espeak_ng; then
+            echo "tuldmi-speakers contains espeak-ng (GPL): use the no-TTS sherpa-onnx libraries"; exit 1
           fi
           mkdir -p dist
           otool -L "$exe" | tee dist/macos-linked-libraries.txt

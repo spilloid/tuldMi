@@ -144,10 +144,16 @@ pub(super) fn events(
         let placeholders = vec!["?"; batch.len()].join(",");
         let ids: Vec<String> = batch.iter().map(|e| e.id.to_string()).collect();
         let mut statement = connection.prepare(&format!(
-            "SELECT id, event_id, start_ms, end_ms, text, confidence FROM transcript_segments
-             WHERE event_id IN ({placeholders}) ORDER BY event_id, start_ms, seq"
+            "SELECT t.id, t.event_id, t.start_ms, t.end_ms, t.text, t.confidence,
+                    p.id, p.label, p.kind
+             FROM transcript_segments t LEFT JOIN speakers p ON p.id = t.speaker_id
+             WHERE t.event_id IN ({placeholders}) ORDER BY t.event_id, t.start_ms, t.seq"
         ))?;
         let segments = statement.query_map(params_from_iter(ids.iter()), |row| {
+            let speaker = match row.get::<_, Option<String>>(6)? {
+                Some(_) => Some(Speaker { id: uuid(row, 6)?, label: row.get(7)?, kind: row.get(8)? }),
+                None => None,
+            };
             Ok(TranscriptSegment {
                 id: uuid(row, 0)?,
                 event_id: uuid(row, 1)?,
@@ -155,6 +161,7 @@ pub(super) fn events(
                 end_ms: row.get(3)?,
                 text: row.get(4)?,
                 confidence: row.get(5)?,
+                speaker,
             })
         })?;
         for segment in segments {

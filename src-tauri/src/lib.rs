@@ -19,6 +19,9 @@ use tuldmi_engine::engine::{Engine, EngineConfig};
 use tuldmi_engine::types::CaptureState;
 
 pub const VAD_MODEL: &str = "ggml-silero-v6.2.0.bin";
+/// Bundled sound classifier for music rejection (CED-tiny, AudioSet; Apache-2.0) and its labels.
+pub const SOUND_MODEL: &str = "ced-tiny-audioset.int8.onnx";
+pub const SOUND_LABELS: &str = "audioset-labels.csv";
 
 pub struct AppState {
     pub engine: Arc<Engine>,
@@ -84,6 +87,10 @@ pub fn run() {
             commands::storage_stats,
             commands::open_data_dir,
             commands::mcp_server_path,
+            commands::speaker_models,
+            commands::rename_speaker,
+            commands::separate_past_recordings,
+            commands::transcribe_anyway,
             commands::export_transcripts,
             commands::reveal_path,
             commands::quit_app,
@@ -182,6 +189,10 @@ fn setup(app: &AppHandle) -> Result<(), String> {
     if std::env::args().any(|a| a == PAUSE_ARG) {
         std::process::exit(PAUSE_NOT_RUNNING);
     }
+    // The main window is configured with `create: false` and built here, after the `--pause`
+    // exit above, so asking a tuldMi that isn't running to pause never starts a WebView.
+    let config = app.config().app.windows.iter().find(|w| w.label == "main").cloned().ok_or("main window missing from tauri.conf.json")?;
+    tauri::WebviewWindowBuilder::from_config(app, &config).and_then(|w| w.build()).map_err(|e| e.to_string())?;
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_dir).map_err(|e| format!("cannot create {}: {e}", data_dir.display()))?;
 
@@ -193,6 +204,11 @@ fn setup(app: &AppHandle) -> Result<(), String> {
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "tuldMi starting");
 
     let vad_model_path = app.path().resolve(VAD_MODEL, BaseDirectory::Resource).ok().filter(|p| p.exists());
+    let resource = |name: &str| app.path().resolve(name, BaseDirectory::Resource).ok().filter(|p| p.exists());
+    let sound_model = resource(SOUND_MODEL).zip(resource(SOUND_LABELS));
+    if sound_model.is_none() {
+        tracing::warn!("bundled sound classifier not found; music is transcribed like speech");
+    }
     if vad_model_path.is_none() {
         tracing::warn!("bundled Silero VAD model not found; using energy VAD");
     }
@@ -202,7 +218,7 @@ fn setup(app: &AppHandle) -> Result<(), String> {
     mac_menu(app).map_err(|e| e.to_string())?;
 
     let sink = Arc::new(events::TauriSink::new(app.clone()));
-    let engine = Engine::start(EngineConfig { data_dir: data_dir.clone(), vad_model_path, suppress_autostart: false }, sink).map_err(|e| e.to_string())?;
+    let engine = Engine::start(EngineConfig { data_dir: data_dir.clone(), vad_model_path, suppress_autostart: false, speaker_worker: commands::sidecar("tuldmi-speakers"), sound_model }, sink).map_err(|e| e.to_string())?;
     let engine = Arc::new(engine);
     let settings = engine.settings();
     app.manage(AppState { engine: engine.clone(), data_dir, _log_guard: guard });

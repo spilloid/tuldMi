@@ -107,7 +107,7 @@ transcript text or audio.
 
 ## Packaging
 
-- `scripts/build-mcp.mjs` (run by `scripts/release.ps1` and the macOS workflow) builds
+- `scripts/build-sidecars.mjs` (run by `scripts/release.ps1` and the macOS workflow) builds
   `tuldmi-mcp` for the bundle's target and copies it to `src-tauri/binaries/tuldmi-mcp-<triple>`.
   `externalBin` lives in a bundle-only overlay, `src-tauri/tauri.bundle.conf.json`, passed with
   `--config`, so ordinary `cargo build`/`tauri dev` don't need the sidecar.

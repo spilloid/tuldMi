@@ -19,7 +19,11 @@ pub struct CatalogEntry {
     pub id: &'static str,
     pub name: &'static str,
     pub description: &'static str,
+    /// File name under `models/`.
     pub file: &'static str,
+    /// Where the file is downloaded from (pinned; verified by `sha256` and `size_bytes`).
+    pub url: &'static str,
+    pub license: &'static str,
     pub size_bytes: u64,
     pub sha256: &'static str,
     pub multilingual: bool,
@@ -35,6 +39,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         name: "Whisper Tiny (English)",
         description: "Fastest and smallest. Good for older or low-power machines; less accurate.",
         file: "ggml-tiny.en.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+        license: LICENSE,
         size_bytes: 77_704_715,
         sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
         multilingual: false,
@@ -45,6 +51,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         name: "Whisper Base (English)",
         description: "Balanced speed and accuracy for English on most CPUs. Recommended.",
         file: "ggml-base.en.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+        license: LICENSE,
         size_bytes: 147_964_211,
         sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
         multilingual: false,
@@ -55,6 +63,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         name: "Whisper Base (Multilingual)",
         description: "Same size as Base English, recognizes ~99 languages.",
         file: "ggml-base.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+        license: LICENSE,
         size_bytes: 147_951_465,
         sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
         multilingual: true,
@@ -65,6 +75,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         name: "Whisper Small (English)",
         description: "Noticeably more accurate English; needs a reasonably fast CPU.",
         file: "ggml-small.en.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
+        license: LICENSE,
         size_bytes: 487_614_201,
         sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
         multilingual: false,
@@ -75,6 +87,8 @@ pub const CATALOG: &[CatalogEntry] = &[
         name: "Whisper Large v3 Turbo (quantized)",
         description: "Highest accuracy, multilingual. Slowest on CPU; best on fast machines.",
         file: "ggml-large-v3-turbo-q5_0.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+        license: LICENSE,
         size_bytes: 574_041_195,
         sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
         multilingual: true,
@@ -82,13 +96,43 @@ pub const CATALOG: &[CatalogEntry] = &[
     },
 ];
 
+/// The two models remote speaker separation needs (docs/design/speakers.md), downloaded
+/// together with the user's consent. Hashes from the Hugging Face LFS metadata, 2026-11-10,
+/// matching the copies in sherpa-onnx's GitHub releases; URLs pinned to a commit.
+pub const SPEAKER_CATALOG: &[CatalogEntry] = &[
+    CatalogEntry {
+        id: "speakers-segmentation",
+        name: "Speaker segmentation (pyannote 3.0)",
+        description: "Finds where each voice speaks in system audio.",
+        file: "pyannote-segmentation-3.0.onnx",
+        url: "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/9403a6902bb58e3d5ae8c7e77c3422de279db2e0/model.onnx",
+        license: "MIT (pyannote.audio segmentation-3.0, CNRS; ONNX export by sherpa-onnx)",
+        size_bytes: 5_992_913,
+        sha256: "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079",
+        multilingual: true,
+        recommended: true,
+    },
+    CatalogEntry {
+        id: "speakers-embedding",
+        name: "Voice embeddings (NeMo TitaNet small)",
+        description: "Tells voices apart so each speaker keeps one label through a conversation.",
+        file: "nemo-titanet-small.onnx",
+        url: "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf/nemo_en_titanet_small.onnx",
+        license: "CC-BY-4.0 (NVIDIA NeMo TitaNet-small; ONNX export by sherpa-onnx)",
+        size_bytes: 40_257_283,
+        sha256: "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e",
+        multilingual: true,
+        recommended: true,
+    },
+];
+
 pub fn entry(id: &str) -> Option<&'static CatalogEntry> {
-    CATALOG.iter().find(|e| e.id == id)
+    CATALOG.iter().chain(SPEAKER_CATALOG).find(|e| e.id == id)
 }
 
 impl CatalogEntry {
     pub fn url(&self) -> String {
-        format!("{HF_BASE}{}", self.file)
+        self.url.into()
     }
     pub fn info(&self, installed: bool) -> ModelInfo {
         ModelInfo {
@@ -102,7 +146,7 @@ impl CatalogEntry {
                 "English"
             }
             .into(),
-            license: LICENSE.into(),
+            license: self.license.into(),
             url: self.url(),
             installed,
             recommended: self.recommended,
@@ -168,23 +212,20 @@ impl ModelManager {
             }
         }
     }
+    /// Transcription models (the speaker models are listed by `speaker_models`).
     pub fn list(&self) -> Result<Vec<ModelInfo>> {
+        self.catalog(CATALOG)
+    }
+    pub fn speaker_models(&self) -> Result<Vec<ModelInfo>> {
+        self.catalog(SPEAKER_CATALOG)
+    }
+    fn catalog(&self, catalog: &[CatalogEntry]) -> Result<Vec<ModelInfo>> {
         let installed = self.store.installed_models()?;
-        Ok(CATALOG
-            .iter()
-            .map(|e| {
-                e.info(installed.iter().any(|m| {
-                    m.model_id == e.id
-                        && m.sha256 == e.sha256
-                        && m.bytes == e.size_bytes
-                        && std::fs::metadata(&m.path).is_ok_and(|file| file.len() == e.size_bytes)
-                }))
-            })
-            .collect())
+        Ok(catalog.iter().map(|e| e.info(installed_path(e, &installed).is_some())).collect())
     }
     pub fn download(&self, model_id: &str) -> Result<()> {
         let entry = entry(model_id).ok_or_else(|| Error::Model("unknown model".into()))?;
-        if self.list()?.iter().any(|m| m.id == model_id && m.installed) {
+        if installed_path(entry, &self.store.installed_models()?).is_some() {
             return Ok(());
         }
         let mut downloads = self.downloads.lock();
@@ -316,6 +357,20 @@ impl ModelManager {
         Ok(format!("{:x}", hash.finalize()) == expected)
     }
 }
+/// The verified file of an installed catalog model, if it is installed and intact (recorded
+/// with the catalog hash and size, and still that size on disk).
+pub fn installed_path(entry: &CatalogEntry, installed: &[InstalledModel]) -> Option<std::path::PathBuf> {
+    installed
+        .iter()
+        .find(|m| {
+            m.model_id == entry.id
+                && m.sha256 == entry.sha256
+                && m.bytes == entry.size_bytes
+                && std::fs::metadata(&m.path).is_ok_and(|file| file.len() == entry.size_bytes)
+        })
+        .map(|m| m.path.clone())
+}
+
 impl Drop for ModelManager {
     fn drop(&mut self) {
         self.cancel_all();

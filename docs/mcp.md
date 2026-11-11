@@ -71,6 +71,18 @@ contain mistakes.
 If tuldMi isn't running, `pause_recording` says so; the launched copy exits at once without recording
 or showing anything.
 
+## Separated speakers
+
+When tuldMi has separated the other side of a call into speakers (Settings → Transcription →
+Speakers), results name them: event text marks each change of speaker ("Speaker 1: … Dana: …"),
+`get_event` segments carry a `speaker`, events list their `speakers`, and search matches say who
+said them. Speech nobody could be sure about stays "Remote". Speaker names are part of Remote, so
+an assistant sees them only with *Include the other side (Remote)* on.
+
+## Music
+
+Events tuldMi judged music have no text and `"music": true` (listed as "(music)").
+
 ## What is logged
 
 `tuldmi-mcp` writes one line per call to standard error, which assistants show in their MCP logs:

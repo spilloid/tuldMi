@@ -38,6 +38,10 @@ export class TauriBackend implements Backend {
   storageStats = () => invoke<StorageStats>("storage_stats");
   openDataDir = () => invoke<void>("open_data_dir");
   mcpServerPath = () => invoke<string | null>("mcp_server_path");
+  speakerModels = () => invoke<ModelInfo[]>("speaker_models");
+  renameSpeaker = (id: string, label: string) => invoke<void>("rename_speaker", { id, label });
+  separatePastRecordings = () => invoke<number>("separate_past_recordings");
+  transcribeAnyway = (id: string) => invoke<boolean>("transcribe_anyway", { id });
   exportTranscripts = (format: ExportFormat, from: number | null, to: number | null) =>
     invoke<string>("export_transcripts", { format, from: from ?? undefined, to: to ?? undefined });
   revealPath = (path: string) => invoke<void>("reveal_path", { path });

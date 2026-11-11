@@ -18,6 +18,7 @@ import { MonitoringNote } from "../shared/MonitoringNote";
 import { useAppVersion } from "../../lib/version";
 import { IN_APP_SHORTCUTS } from "../shortcuts/ShortcutSheet";
 import { Group, Row, SectionHeader } from "./parts";
+import { SpeakersGroup } from "./SpeakersGroup";
 
 /** Save a settings patch, surfacing engine errors as toasts. */
 function usePatch() {
@@ -160,6 +161,13 @@ export function TranscriptionSection() {
         <Row label="Engine status" description="Capture never waits for transcription — a backlog simply catches up.">
           <Pill tone={engine.tone}>{engine.text}</Pill>
         </Row>
+        <Row
+          label="Skip music"
+          htmlFor="music-rejection"
+          description="Music and singing with nobody talking show as a collapsed Music row instead of transcribed lyrics. The audio is kept as usual; if a row is really speech, use Transcribe anyway. Speech over music is always transcribed."
+        >
+          <Switch id="music-rejection" label="Skip music" checked={settings.musicRejection ?? true} onCheckedChange={(v) => void save({ musicRejection: v })} />
+        </Row>
         <Row label="Spoken language" description="Automatic detection works well for most speech; choose a language if detection guesses wrong. English-only models transcribe English only.">
           <Select label="Spoken language" value={settings.language} options={LANGUAGES} onChange={(v) => void save({ language: v })} className="w-[220px]" />
         </Row>
@@ -169,7 +177,8 @@ export function TranscriptionSection() {
         {stats?.freeDiskBytes != null && <span className="text-xs text-faint tnum">{formatBytes(stats.freeDiskBytes)} free on this drive</span>}
       </div>
       <ModelList freeDisk={stats?.freeDiskBytes} />
-      <p className="mt-3 px-0.5 text-sm text-faint">Model licenses differ from tuldMi's MIT license. Each is shown above and listed in the third-party notices.</p>
+      <p className="mb-7 mt-3 px-0.5 text-sm text-faint">Model licenses differ from tuldMi's MIT license. Each is shown above and listed in the third-party notices.</p>
+      <SpeakersGroup />
     </>
   );
 }

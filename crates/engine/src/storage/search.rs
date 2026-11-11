@@ -68,27 +68,27 @@ pub(super) fn search(connection: &Connection, query: &SearchQuery, order: Order)
     // Empty text with filters lists matching segments, with an unhighlighted text snippet.
     let sql = if has_text && order == Order::Newest {
         "SELECT e.id, s.id, e.source, e.started_at, s.start_ms,
-         snippet(transcript_fts, 0, ?1, ?2, '...', 16), 0.0
+         snippet(transcript_fts, 0, ?1, ?2, '...', 16), 0.0, p.label
          FROM transcript_fts JOIN transcript_segments s ON s.seq = transcript_fts.rowid
-         JOIN audio_events e ON e.id = s.event_id
+         JOIN audio_events e ON e.id = s.event_id LEFT JOIN speakers p ON p.id = s.speaker_id
          WHERE transcript_fts MATCH ?3 AND (?4 OR e.source != 'mic')
          AND (?5 OR e.source != 'system') AND (?6 IS NULL OR e.started_at >= ?6)
          AND (?7 IS NULL OR e.started_at <= ?7)
          ORDER BY e.started_at DESC, e.id DESC, s.start_ms LIMIT ?8"
     } else if has_text {
         "SELECT e.id, s.id, e.source, e.started_at, s.start_ms,
-         snippet(transcript_fts, 0, ?1, ?2, '...', 16), bm25(transcript_fts)
+         snippet(transcript_fts, 0, ?1, ?2, '...', 16), bm25(transcript_fts), p.label
          FROM transcript_fts JOIN transcript_segments s ON s.seq = transcript_fts.rowid
-         JOIN audio_events e ON e.id = s.event_id
+         JOIN audio_events e ON e.id = s.event_id LEFT JOIN speakers p ON p.id = s.speaker_id
          WHERE transcript_fts MATCH ?3 AND (?4 OR e.source != 'mic')
          AND (?5 OR e.source != 'system') AND (?6 IS NULL OR e.started_at >= ?6)
          AND (?7 IS NULL OR e.started_at <= ?7)
          ORDER BY bm25(transcript_fts), e.started_at DESC, e.id DESC, s.start_ms LIMIT ?8"
     } else {
         "SELECT e.id, s.id, e.source, e.started_at, s.start_ms,
-         snippet(transcript_fts, 0, ?1, ?2, '...', 16), 0.0
+         snippet(transcript_fts, 0, ?1, ?2, '...', 16), 0.0, p.label
          FROM transcript_fts JOIN transcript_segments s ON s.seq = transcript_fts.rowid
-         JOIN audio_events e ON e.id = s.event_id
+         JOIN audio_events e ON e.id = s.event_id LEFT JOIN speakers p ON p.id = s.speaker_id
          WHERE ?3 = ''
          AND (?4 OR e.source != 'mic') AND (?5 OR e.source != 'system')
          AND (?6 IS NULL OR e.started_at >= ?6) AND (?7 IS NULL OR e.started_at <= ?7)
@@ -117,6 +117,7 @@ pub(super) fn search(connection: &Connection, query: &SearchQuery, order: Order)
                     at: started_at.saturating_add(start_ms),
                     snippet: row.get(5)?,
                     rank: row.get(6)?,
+                    speaker: row.get(7)?,
                 })
             },
         )?

@@ -80,6 +80,30 @@ pub struct CaptureStatus {
     /// Id of the active transcription model, if one is installed and loaded.
     pub model_id: Option<String>,
     pub transcriber: TranscriberState,
+    /// Remote speaker separation (docs/design/speakers.md).
+    pub separation: SeparationStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SeparationState {
+    /// Switched off in settings.
+    #[default]
+    Off,
+    /// Switched on, but one or both speaker models aren't installed.
+    NeedsModels,
+    /// Switched on, but the worker is missing from this install or kept failing this session.
+    Unavailable,
+    Ready,
+    Working,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeparationStatus {
+    pub state: SeparationState,
+    /// While "Separate past recordings" runs: system events it still has to look at.
+    pub backfill_remaining: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,8 +186,8 @@ impl EventStatus {
 pub struct Speaker {
     pub id: Uuid,
     pub label: String,
-    /// "self" for the local user, "remote" for the undiarized system-audio speaker,
-    /// "person" for future diarized/named speakers.
+    /// "self" for the local user, "remote" for system audio nobody separated, "person" for a
+    /// remote speaker separated within one conversation (docs/design/speakers.md).
     pub kind: String,
 }
 
@@ -192,6 +216,8 @@ pub struct TranscriptSegment {
     pub text: String,
     /// 0..=1 when the backend reports it.
     pub confidence: Option<f32>,
+    /// A separated remote speaker (kind "person"); None = the event's speaker.
+    pub speaker: Option<Speaker>,
 }
 
 /// One VAD-delimited span of speech from one source. The timeline's unit.
@@ -250,6 +276,8 @@ pub struct SearchHit {
     pub at: i64,
     pub snippet: String,
     pub rank: f64,
+    /// Label of the separated remote speaker who said it; None = the source's speaker.
+    pub speaker: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,6 +360,11 @@ pub struct Settings {
     pub theme: Theme,
     /// What AI assistants may read through `tuldmi-mcp`. Off by default.
     pub mcp: McpSettings,
+    /// Separate remote speakers (needs the two speaker models). Off by default.
+    pub speakers_enabled: bool,
+    /// Keep music as a collapsed "Music" row instead of transcribing lyrics (the sound
+    /// classifier is bundled). On by default.
+    pub music_rejection: bool,
 }
 
 /// The ceiling on `tuldmi-mcp` (docs/design/mcp.md), re-read by it on every request.
@@ -381,6 +414,8 @@ impl Default for Settings {
             .into(),
             theme: Theme::System,
             mcp: McpSettings::default(),
+            speakers_enabled: false,
+            music_rejection: true,
         }
     }
 }

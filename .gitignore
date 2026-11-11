@@ -6,5 +6,7 @@ dist/
 .DS_Store
 /src-tauri/gen/
 /scratch/
-# tuldmi-mcp sidecar, built by scripts/build-mcp.mjs
+# tuldmi-mcp and tuldmi-speakers sidecars, built by scripts/build-sidecars.mjs
 src-tauri/binaries/
+# sherpa-onnx prebuilt static libraries, fetched by scripts/sherpa-libs.mjs
+/.sherpa-onnx/

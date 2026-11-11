@@ -88,7 +88,8 @@ or works through a backlog.
 
 **Diarization:** v0.1.0 mandatory source separation only — Microphone → Me, System audio → Remote.
 Multi-speaker diarization optional. Never imply separate remote speakers were identified unless a
-real diarization model did it. Future-compatible speaker identity schema (embeddings, manual
+real diarization model did it. (0.4.0: optional per-conversation separation of Remote by a local
+model, docs/design/speakers.md; uncertain speech stays "Remote".) Future-compatible speaker identity schema (embeddings, manual
 naming, background diarization).
 
 ## 4. Core user experience

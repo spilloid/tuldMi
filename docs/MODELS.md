@@ -48,4 +48,32 @@ The `TranscriptionProvider` trait is the seam for adding it (likely v0.2).
 
 ## Not used
 
-No cloud ASR. No speaker-diarization model in v0.1.0 (mic/system source separation only).
+No cloud ASR.
+
+## Music detection (0.4.0, bundled)
+
+| Model | File | Size | License |
+|---|---|---|---|
+| CED-tiny AudioSet tagger (RicherMans/CED; ONNX int8 export by sherpa-onnx) | `ced-tiny-audioset.int8.onnx` + `audioset-labels.csv` | 6.1 MB | Apache-2.0 |
+
+Shipped inside the installer (like the Silero VAD model) and run by `tuldmi-speakers`. Only the
+Speech, Music and Singing classes are used. Thresholds and calibration: docs/design/speakers.md,
+"Music". From sherpa-onnx's `audio-tagging-models` release
+(`sherpa-onnx-ced-tiny-audio-tagging-2024-04-19`); SHA-256 of the model
+`73aa22e783115f6a4ae169b36089907e07d0fd44795595eddea9c1bfc74cc945`.
+
+## Speaker separation (0.4.0, optional)
+
+Downloaded together, only when the user asks (Settings → Transcription → Speakers), from
+commit-pinned Hugging Face URLs, verified by size and SHA-256 (`models::SPEAKER_CATALOG`):
+
+| Model | File | Size | License |
+|---|---|---|---|
+| pyannote segmentation 3.0 (ONNX export by sherpa-onnx) | `pyannote-segmentation-3.0.onnx` | 6.0 MB | MIT (CNRS) |
+| NVIDIA NeMo TitaNet-small (ONNX export by sherpa-onnx) | `nemo-titanet-small.onnx` | 40.3 MB | CC-BY-4.0 |
+
+They run in `tuldmi-speakers` through sherpa-onnx (Apache-2.0) and ONNX Runtime (MIT), never in
+the app process (docs/design/speakers.md). Chosen on 2026-11-10 against two other embedding
+models (3D-Speaker CAM++, WeSpeaker ResNet34) on sherpa-onnx's test clips and two AMI Meeting
+Corpus recordings; TitaNet-small was the only one to get every speaker count right. The AMI
+results through the shipping pipeline are in docs/design/speakers.md.

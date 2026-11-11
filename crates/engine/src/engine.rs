@@ -64,6 +64,12 @@ pub struct EngineConfig {
     pub vad_model_path: Option<PathBuf>,
     /// Override for tests: never start capture automatically even if settings say so.
     pub suppress_autostart: bool,
+    /// The `tuldmi-speakers` worker installed with the app. None = speaker separation and music
+    /// rejection are unavailable in this build (Settings says so).
+    pub speaker_worker: Option<PathBuf>,
+    /// The bundled sound classifier for music rejection: (CED model, AudioSet label list).
+    /// None or missing files = music is transcribed like speech.
+    pub sound_model: Option<(PathBuf, PathBuf)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -75,6 +81,8 @@ pub enum ExportFormat {
 
 #[path = "runtime.rs"]
 mod runtime;
+#[path = "separation.rs"]
+mod separation;
 use crate::dispatch::Dispatcher;
 use crate::{Error, models::ModelManager};
 use crossbeam_channel::{Sender, bounded};
@@ -238,8 +246,32 @@ impl Engine {
         {
             return Err(Error::Other("invalid VAD settings".into()));
         }
-        let previous_retention = self.shared.settings.lock().retention;
+        let (previous_retention, previous_speakers, previous_music) = {
+            let current = self.shared.settings.lock();
+            (current.retention, current.speakers_enabled, current.music_rejection)
+        };
         self.shared.store.save_settings(&settings)?;
+        if previous_speakers != settings.speakers_enabled || previous_music != settings.music_rejection {
+            // Voices, speaker results and music decisions from before a switch must not survive
+            // it, even if it is switched back before the transcription thread looks. Bumped under
+            // the persist gate, which every such result is checked and saved under, so a save
+            // either happens wholly before the switch or sees it (docs/design/speakers.md).
+            // The switches take effect here too, together with the bump: no work can start under
+            // the new generation while the old setting is still in force. (The full settings
+            // follow below through the capture thread, with the same values.)
+            let _gate = self.shared.persist_gate.lock();
+            {
+                let mut current = self.shared.settings.lock();
+                current.speakers_enabled = settings.speakers_enabled;
+                current.music_rejection = settings.music_rejection;
+            }
+            if previous_speakers != settings.speakers_enabled {
+                self.shared.speakers_generation.fetch_add(1, Ordering::AcqRel);
+            }
+            if previous_music != settings.music_rejection {
+                self.shared.music_generation.fetch_add(1, Ordering::AcqRel);
+            }
+        }
         self.request(|reply| Command::Settings(settings.clone(), reply))?;
         let _ = self.shared.wake.try_send(());
         if previous_retention != settings.retention {
@@ -331,6 +363,51 @@ impl Engine {
     }
     pub fn list_models(&self) -> Result<Vec<ModelInfo>> {
         self.models.list()
+    }
+    /// The two models speaker separation needs (download them with `download_model`).
+    pub fn speaker_models(&self) -> Result<Vec<ModelInfo>> {
+        self.models.speaker_models()
+    }
+    /// Rename a separated remote speaker; every event showing them is re-announced.
+    pub fn rename_speaker(&self, id: Uuid, label: &str) -> Result<()> {
+        // Announced under the gate: a rename's update can't land after a deletion or a later
+        // rename of the same speaker.
+        let _gate = self.shared.persist_gate.lock();
+        let events = self.shared.store.rename_speaker(id, label)?;
+        separation::announce(&self.shared, events);
+        Ok(())
+    }
+    /// Start separating speakers in past conversations whose audio is still kept. Runs on the
+    /// transcription thread whenever nothing waits for transcription. Returns how many system
+    /// events could be looked at (0 = nothing to do).
+    /// "Transcribe anyway" on an event judged music. False if it can't be (not music, or its
+    /// audio is gone).
+    pub fn transcribe_anyway(&self, id: Uuid) -> Result<bool> {
+        let queued = {
+            let _gate = self.shared.persist_gate.lock();
+            let queued = self.shared.store.transcribe_anyway(id)?;
+            if queued {
+                self.shared.upsert(id)?;
+            }
+            queued
+        };
+        if queued {
+            self.shared.refresh_backlog();
+            let _ = self.shared.wake.try_send(());
+        }
+        Ok(queued)
+    }
+
+    pub fn separate_past_recordings(&self) -> Result<u32> {
+        if !self.shared.settings.lock().speakers_enabled {
+            return Err(Error::Other("turn on speaker separation first".into()));
+        }
+        let candidates = self.shared.store.backfill_candidates()?;
+        if candidates > 0 {
+            self.shared.backfill_requested.store(true, Ordering::Release);
+            let _ = self.shared.wake.try_send(());
+        }
+        Ok(candidates)
     }
     pub fn download_model(&self, model_id: &str) -> Result<()> {
         self.models.download(model_id)

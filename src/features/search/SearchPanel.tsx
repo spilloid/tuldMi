@@ -245,7 +245,7 @@ function HitRow({ hit, index, active, onHover, onOpen, page }: { hit: SearchHit;
     >
       <span className="flex items-center gap-1.5 text-xs font-semibold">
         <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${me ? "bg-me" : "bg-remote"}`} />
-        <span className={me ? "text-me-text" : "text-remote-text"}>{me ? "Me" : "Remote"}</span>
+        <span className={me ? "text-me-text" : "text-remote-text"}>{me ? "Me" : (hit.speaker ?? "Remote")}</span>
       </span>
       <p className={`min-w-0 text-base leading-[21px] text-muted ${page ? "" : "truncate"}`}>
         <Highlighted snippet={hit.snippet} />

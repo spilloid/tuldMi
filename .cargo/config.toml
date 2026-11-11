@@ -2,3 +2,13 @@
 # bindgen (whisper-rs-sys) needs libclang; whisper-rs-sys's pre-generated bindings are Linux-only
 # (struct layouts differ on Windows, where `long` is 4 bytes).
 LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'
+# sherpa-onnx (tuldmi-speakers) links prebuilt static libraries, fetched and hash-checked by
+# `node scripts/sherpa-libs.mjs` — never downloaded unverified by sherpa-onnx-sys's build script.
+SHERPA_ONNX_LIB_DIR = { value = ".sherpa-onnx/lib", relative = true }
+# Keeps CMake-built C libraries (libopus, whisper.cpp) on the same C runtime; no-op off Windows.
+CMAKE_TOOLCHAIN_FILE = { value = "cmake/msvc-static-runtime.cmake", relative = true }
+
+# sherpa-onnx's Windows libraries are built with the static C runtime (/MT); building the whole
+# workspace the same way keeps one C runtime in every binary (whisper.cpp follows crt-static).
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

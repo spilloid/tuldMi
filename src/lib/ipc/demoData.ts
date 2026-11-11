@@ -6,7 +6,9 @@
 
 import type { DeviceInfo, EventStatus, ModelInfo, Source, Speaker, SpeechEvent } from "./types";
 
-type Turn = [Source, string | string[], Partial<Pick<SpeechEvent, "status" | "error">>?];
+/** `speakers`: separated remote speaker per text (demo of docs/design/speakers.md). */
+type TurnOptions = Partial<Pick<SpeechEvent, "status" | "error">> & { speakers?: string[] };
+type Turn = [Source, string | string[], TurnOptions?];
 
 interface ScriptedConversation {
   /** Days before today (0 = today). */
@@ -34,6 +36,9 @@ const conversations: ScriptedConversation[] = [
       ["system", "Offline sync is the big one. Edits now queue locally and replay in order when you reconnect, with conflict markers instead of silent overwrites."],
       ["system", "Sharing moves from per-document links to workspaces, so access follows the team instead of the file."],
       ["mic", "Okay, the conflict markers part is what we need for the field team."],
+      ["system", "", { status: "empty", error: "Music; audio kept" }],
+      ["system", "", { status: "empty", error: "Music; audio kept" }],
+      ["system", "", { status: "empty", error: "Music; audio kept" }],
       ["system", "Pricing for existing customers doesn't change until your renewal date, and annual plans keep their current rate for one more term."],
     ],
   },
@@ -103,14 +108,16 @@ const conversations: ScriptedConversation[] = [
     daysAgo: 0,
     at: { minutesAgo: 310 },
     turns: [
-      ["system", "Okay, let's start. Standup, quick round. Jae, you want to go first?"],
+      ["system", "Okay, let's start. Standup, quick round. Jae, you want to go first?", { speakers: ["Speaker 1"] }],
       ["mic", "Sure. Yesterday I finished the export flow, Markdown and JSON both work. Today I'm on the settings storage page."],
-      ["system", "Nice. Any blockers?"],
+      ["system", "Nice. Any blockers?", { speakers: ["Speaker 1"] }],
       ["mic", "Not really. I need someone to review the retention copy, it has to be very clear that transcripts are kept."],
-      ["system", "I can take that review after lunch."],
-      ["system", "From my side, the installer is signed now. I'm testing the upgrade path from the beta build today."],
+      ["system", [
+        "I can take that review after lunch.",
+        "From my side, the installer is signed now. I'm testing the upgrade path from the beta build today.",
+      ], { speakers: ["Speaker 1", "Priya"] }],
       ["mic", "Does the upgrade keep the database in place?"],
-      ["system", "It does. The data folder isn't touched, only the app binaries."],
+      ["system", "It does. The data folder isn't touched, only the app binaries.", { speakers: ["Priya"] }],
     ],
   },
   {
@@ -176,15 +183,16 @@ export function makeEvent(
   status: EventStatus,
   error: string | null,
   audioExpired: boolean,
+  speakers: (Speaker | null)[] = [],
 ): SpeechEvent {
   const id = uuid();
   let offset = 0;
   const segments = texts
     .filter((t) => t.length > 0)
-    .map((text) => {
+    .map((text, i) => {
       const words = text.split(/\s+/).length;
       const dur = Math.round((words / WORDS_PER_SECOND) * 1000);
-      const seg = { id: uuid(), eventId: id, startMs: offset, endMs: offset + dur, text, confidence: 0.86 + ((words * 7) % 13) / 100 };
+      const seg = { id: uuid(), eventId: id, startMs: offset, endMs: offset + dur, text, confidence: 0.86 + ((words * 7) % 13) / 100, speaker: speakers[i] ?? null };
       offset += dur + 420;
       return seg;
     });
@@ -226,10 +234,17 @@ export function buildDemoEvents(now: number): { events: SpeechEvent[]; pendingTe
     }
     const sessionId = uuid();
     const expired = now - t > DEMO_RETENTION_DAYS * 86_400_000;
+    // Separated speakers are per conversation: one row per label.
+    const people = new Map<string, Speaker>();
+    const person = (label: string) => {
+      let p = people.get(label);
+      if (!p) people.set(label, (p = { id: uuid(), label, kind: "person" }));
+      return p;
+    };
     for (const [source, text, opts] of conv.turns) {
       const texts = Array.isArray(text) ? text : [text];
       const status = opts?.status ?? "done";
-      const ev = makeEvent(source, sessionId, t, texts, status, opts?.error ?? null, expired);
+      const ev = makeEvent(source, sessionId, t, texts, status, opts?.error ?? null, expired, (opts?.speakers ?? []).map(person));
       if (status === "queued" || status === "transcribing") {
         // The text this event will "resolve" to once the demo finishes transcribing it.
         pendingText.set(ev.id, texts.filter(Boolean).length ? texts : [LIVE_SCRIPT[0][1] as string]);
@@ -263,6 +278,32 @@ export const DEMO_DEVICES: DeviceInfo[] = [
 // Mirrors crates/engine/src/models.rs CATALOG exactly (ids, names, sizes, license).
 const HF_BASE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
 const DEMO_LICENSE = "MIT (OpenAI Whisper weights; ggml conversion by whisper.cpp)";
+
+/** Mirrors crates/engine/src/models.rs SPEAKER_CATALOG (demo: nothing is downloaded). */
+export const DEMO_SPEAKER_MODELS: ModelInfo[] = [
+  {
+    id: "speakers-segmentation",
+    name: "Speaker segmentation (pyannote 3.0)",
+    description: "Finds where each voice speaks in system audio.",
+    sizeBytes: 5_992_913,
+    languages: "Multilingual",
+    license: "MIT (pyannote.audio segmentation-3.0, CNRS; ONNX export by sherpa-onnx)",
+    url: "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0",
+    installed: false,
+    recommended: true,
+  },
+  {
+    id: "speakers-embedding",
+    name: "Voice embeddings (NeMo TitaNet small)",
+    description: "Tells voices apart so each speaker keeps one label through a conversation.",
+    sizeBytes: 40_257_283,
+    languages: "Multilingual",
+    license: "CC-BY-4.0 (NVIDIA NeMo TitaNet-small; ONNX export by sherpa-onnx)",
+    url: "https://huggingface.co/csukuangfj/speaker-embedding-models",
+    installed: false,
+    recommended: true,
+  },
+];
 
 export const DEMO_MODELS: ModelInfo[] = [
   {

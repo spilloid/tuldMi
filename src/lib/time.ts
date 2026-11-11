@@ -1,4 +1,4 @@
-import type { SpeechEvent } from "./ipc/types";
+import type { Speaker, SpeechEvent, TranscriptSegment } from "./ipc/types";
 import { compareEvents } from "./ipc/backend";
 
 export const MINUTE = 60_000;
@@ -167,4 +167,84 @@ export function eventText(ev: SpeechEvent): string {
 
 export function sourceLabel(ev: Pick<SpeechEvent, "source" | "speaker">): string {
   return ev.speaker?.label ?? (ev.source === "mic" ? "Me" : "Remote");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Separated remote speakers (docs/design/speakers.md)
+// ---------------------------------------------------------------------------------------------
+
+/** Consecutive segments of one event said by one speaker. */
+export interface SpeakerRun {
+  /** A separated remote speaker, or null for the event's own speaker (Me / Remote). */
+  speaker: Speaker | null;
+  label: string;
+  startMs: number;
+  segments: TranscriptSegment[];
+  text: string;
+}
+
+/** True when tuldMi separated at least one remote speaker in this event. */
+export function isSeparated(ev: SpeechEvent): boolean {
+  return ev.segments.some((s) => s.speaker != null);
+}
+
+/** The event's segments grouped by who said them, in order. Unseparated events give one run. */
+export function speakerRuns(ev: SpeechEvent): SpeakerRun[] {
+  const runs: SpeakerRun[] = [];
+  for (const seg of ev.segments) {
+    const text = seg.text.trim();
+    if (!text) continue;
+    const last = runs[runs.length - 1];
+    if (last && (last.speaker?.id ?? null) === (seg.speaker?.id ?? null)) {
+      last.segments.push(seg);
+      last.text += " " + text;
+    } else {
+      runs.push({ speaker: seg.speaker, label: seg.speaker?.label ?? sourceLabel(ev), startMs: seg.startMs, segments: [seg], text });
+    }
+  }
+  return runs;
+}
+
+/** Who speaks first and last in an event (for showing a label only when the speaker changes). */
+export function speakerKeys(ev: SpeechEvent): { first: string; last: string } {
+  const runs = speakerRuns(ev);
+  const key = (r: SpeakerRun | undefined) => r?.speaker?.id ?? ev.source;
+  return { first: key(runs[0]), last: key(runs[runs.length - 1]) };
+}
+
+/** Everyone heard in a set of events: Me, then remote speakers in order of first appearance. */
+export function participants(events: SpeechEvent[]): string[] {
+  const out: string[] = [];
+  const add = (label: string) => !out.includes(label) && out.push(label);
+  if (events.some((e) => e.source === "mic")) add("Me");
+  for (const ev of events) {
+    if (ev.source !== "system") continue;
+    const runs = speakerRuns(ev);
+    if (!runs.length) add(sourceLabel(ev));
+    for (const run of runs) add(run.label);
+  }
+  return out;
+}
+
+/** Separated speakers of a conversation, numbered by first appearance (for their colours). */
+export function speakerOrder(events: SpeechEvent[]): Map<string, number> {
+  const order = new Map<string, number>();
+  for (const ev of events) for (const seg of ev.segments) if (seg.speaker && !order.has(seg.speaker.id)) order.set(seg.speaker.id, order.size);
+  return order;
+}
+
+/** "2026-11-09 14:02:11", the timestamp used when copying transcripts. */
+export function stamp(t: number): string {
+  const d = new Date(t);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/** Events as copyable transcript text: one "[time] Speaker: text" line per speaker run. */
+export function transcriptText(events: SpeechEvent[]): string {
+  const lines: string[] = [];
+  for (const ev of [...events].sort(compareEvents)) {
+    for (const run of speakerRuns(ev)) lines.push(`[${stamp(ev.startedAt + run.startMs)}] ${run.label}: ${run.text}`);
+  }
+  return lines.join("\n");
 }

@@ -28,8 +28,18 @@ playable timeline of what was said. Nothing leaves your device unless you connec
   to 547 MB); audio keeps being captured and queued until one is installed.
 - **Timeline** grouped by day and conversation, with quiet gaps collapsed, live arrivals that
   never yank your scroll position, and a "Back to live" pill.
-- **Instant full-text search** (SQLite FTS5) with highlights, Me/Remote and date filters, and
-  jump-to-moment.
+- **Remote speakers, separated (off by default)**: the other side of a call is labelled by voice,
+  Speaker 1, Speaker 2…, within each conversation, and you can name them. Runs on your computer
+  with two small models you download on request; voice fingerprints are never saved. Earlier
+  conversations whose audio you kept can be separated too. See
+  [docs/design/speakers.md](docs/design/speakers.md).
+- **Music isn't transcribed** (on by default): music and singing with nobody talking show as a
+  collapsed Music row instead of lyrics, judged on your computer by a small bundled classifier.
+  Speech over music is still transcribed, and **Transcribe anyway** fixes a wrong call.
+- **Copy what was said**: Shift+click to select a stretch of the timeline and copy it, or copy a
+  whole conversation, as timestamped `[time] Speaker: text` lines.
+- **Instant full-text search** (SQLite FTS5) with highlights, Me/Remote and date filters, speaker
+  names, and jump-to-moment.
 - **Playback** of retained audio with a scrubbable waveform and speed control.
 - **Retention you control**: delete audio right after transcription, keep 7 days, 30 days, or
   forever. Transcripts are kept independently.
@@ -43,8 +53,9 @@ playable timeline of what was said. Nothing leaves your device unless you connec
 
 ## Privacy
 
-No accounts, no telemetry, no cloud. The only network request tuldMi ever makes is downloading a
-transcription model you explicitly choose, verified by SHA-256. Recording conversations is
+No accounts, no telemetry, no cloud. The only network requests tuldMi ever makes are downloading
+models you explicitly choose (transcription, and optionally speaker separation), verified by
+SHA-256. Recording conversations is
 regulated — you are responsible for consent laws and workplace policy. Full details, including
 what is **not** yet protected (no encryption at rest yet): [docs/PRIVACY.md](docs/PRIVACY.md).
 
@@ -82,6 +93,8 @@ npm install
 npm run tauri dev      # the app
 npm run dev            # frontend only, in a browser, on labelled demo data
 cargo test -p tuldmi-engine
+node scripts/sherpa-libs.mjs   # once: pinned sherpa-onnx libraries for the speaker worker
+cargo build -p tuldmi-speakers # the worker `npm run tauri dev` finds next to the app
 ```
 
 Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · IPC contract: [docs/IPC.md](docs/IPC.md) ·
@@ -93,8 +106,10 @@ Models and licenses: [docs/MODELS.md](docs/MODELS.md) · Releasing: [docs/RELEAS
   is ad-hoc signed macOS asks for microphone and system-audio permission again after an update.
   If permission is denied, macOS delivers silence rather than an error.
 - No Linux build yet.
-- "Remote" is everything your computer plays; individual remote speakers are **not** identified
-  (no diarization yet).
+- Remote speaker separation is per conversation: tuldMi doesn't recognize the same person across
+  meetings (nothing about their voice is kept). Someone who only says a few short words stays
+  "Remote", and voices that sound alike, crosstalk, or heavily compressed calls can be mixed up.
+  Your own microphone is never split, so people in the room with you are all "Me".
 - No encryption at rest (database and audio are protected by your OS account / disk
   encryption only).
 - CPU transcription only (no GPU acceleration yet); large models are slow on modest CPUs.

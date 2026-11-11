@@ -12,7 +12,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const ROOT_CRATES = ['tuldmi', 'tuldmi-engine'];
+// Everything that ships: the app and both sidecars installed beside it.
+const ROOT_CRATES = ['tuldmi', 'tuldmi-engine', 'tuldmi-mcp', 'tuldmi-speakers'];
 const FLAG_RE = /GPL|MPL|EPL|CDDL|SSPL|BUSL|commercial/i;
 const MISSING = '(missing)';
 
@@ -53,7 +54,7 @@ function rustPackages() {
     throw new Error(`expected workspace packages ${ROOT_CRATES.join(', ')}, found ${roots.length}`);
   }
 
-  // Walk the resolved graph from the two roots. An edge counts only if it is
+  // Walk the resolved graph from the roots. An edge counts only if it is
   // a normal or build edge somewhere (dev-only edges are not shipped).
   const seen = new Set(roots);
   const queue = [...roots];
@@ -196,6 +197,18 @@ their licenses, so they are listed explicitly.
 - whisper.cpp / ggml: MIT, https://github.com/ggml-org/whisper.cpp
 - libopus: BSD-3-Clause, https://opus-codec.org
 - SQLite: Public domain, https://sqlite.org
+
+Compiled into \`tuldmi-speakers\` (speaker separation), from sherpa-onnx's prebuilt
+no-TTS static libraries (no espeak-ng or other text-to-speech code):
+
+- sherpa-onnx: Apache-2.0, https://github.com/k2-fsa/sherpa-onnx
+- ONNX Runtime: MIT, https://github.com/microsoft/onnxruntime (and the libraries it
+  bundles, listed in its ThirdPartyNotices.txt)
+- kaldi-native-fbank: Apache-2.0, https://github.com/csukuangfj/kaldi-native-fbank
+- kaldi-decoder: Apache-2.0, https://github.com/k2-fsa/kaldi-decoder
+- OpenFst (via kaldifst): Apache-2.0, https://www.openfst.org
+- ssentencepiece: Apache-2.0, https://github.com/k2-fsa/ssentencepiece
+- KISS FFT: BSD-3-Clause, https://github.com/mborgerding/kissfft
 
 ## Rust crates (${rust.length})
 
