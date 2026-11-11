@@ -2,8 +2,11 @@
 
 tuldMi is released under the MIT License (see [LICENSE](LICENSE)). The third-party
 components listed below are distributed under their own licenses, which are
-reproduced or referenced by the upstream projects linked here. Model weights
-downloaded by the app are not covered by this file; see [docs/MODELS.md](docs/MODELS.md).
+reproduced or referenced by the upstream projects linked here. The license texts
+of the native libraries and shipped models are in
+[src-tauri/licenses/](src-tauri/licenses/README.txt), and the installed app carries
+them, with this file, in its `licenses` folder. Model weights downloaded by the app
+are not covered by this file; see [docs/MODELS.md](docs/MODELS.md).
 
 ## Native libraries
 
@@ -23,7 +26,11 @@ no-TTS static libraries (no espeak-ng or other text-to-speech code):
 - kaldi-native-fbank: Apache-2.0, https://github.com/csukuangfj/kaldi-native-fbank
 - kaldi-decoder: Apache-2.0, https://github.com/k2-fsa/kaldi-decoder
 - OpenFst (via kaldifst): Apache-2.0, https://www.openfst.org
-- ssentencepiece: Apache-2.0, https://github.com/k2-fsa/ssentencepiece
+- simple-sentencepiece: Apache-2.0, https://github.com/pkufool/simple-sentencepiece
+- hclust-cpp (fastcluster): BSD-2-Clause, https://github.com/csukuangfj/hclust-cpp
+- Darts-clone (via simple-sentencepiece): BSD-2-Clause, https://github.com/s-yata/darts-clone
+- Eigen: MPL-2.0, https://eigen.tuxfamily.org (text in ONNX Runtime's ThirdPartyNotices.txt)
+- nlohmann/json: MIT, https://github.com/nlohmann/json (text in ONNX Runtime's ThirdPartyNotices.txt)
 - KISS FFT: BSD-3-Clause, https://github.com/mborgerding/kissfft
 
 ## Rust crates (616)

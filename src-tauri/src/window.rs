@@ -93,6 +93,32 @@ pub fn on_event(window: &Window, event: &WindowEvent) {
 mod tests {
     use super::shortcut_label;
 
+    /// `setup` builds the main window itself, after the `--pause` exit, so Tauri must never
+    /// build it first. A platform file's `windows` array replaces the base one (JSON merge
+    /// patch), so every file that declares windows must say `create: false` itself, or that
+    /// platform creates `main` twice and never starts.
+    #[test]
+    fn no_config_file_lets_tauri_create_the_main_window() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut checked = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !(name.starts_with("tauri.") && name.ends_with(".json")) {
+                continue;
+            }
+            let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let Some(windows) = config.pointer("/app/windows").and_then(|w| w.as_array()) else {
+                continue;
+            };
+            for window in windows {
+                assert_eq!(window.get("create"), Some(&serde_json::Value::Bool(false)), "{name}: window {:?} must set \"create\": false", window.get("label"));
+                checked += 1;
+            }
+        }
+        assert!(checked >= 2, "expected the base and macOS window configs, checked {checked}");
+    }
+
     #[test]
     fn default_pause_shortcut_reads_naturally() {
         let label = shortcut_label("CommandOrControl+Shift+Backquote");

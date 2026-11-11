@@ -18,8 +18,9 @@ All notable changes to tuldMi are documented here. Format: [Keep a Changelog](ht
 - **Music isn't transcribed (on by default).** Music and singing with nobody talking show as a
   collapsed Music row ("Music · 40 s · 10 clips") instead of transcribed lyrics. A small sound
   classifier that ships with tuldMi (CED-tiny, Apache-2.0, 6 MB) decides on your computer; speech
-  over music is still transcribed. If a row is really speech, **Transcribe anyway**. Switch it off
-  in Settings › Transcription › Skip music.
+  over music is still transcribed. If a row is really speech, **Transcribe anyway**; with *Delete
+  after transcription*, music audio is kept 24 hours for that. Switch it off in Settings ›
+  Transcription › Skip music.
 - **Copy what was said.** Shift+click two events to select everything between them, then press
   Ctrl+C (⌘C) or use the Copy bar; each conversation also has **Copy conversation**. The text is
   one `[2026-11-09 14:02:11] Speaker: …` line per speaker.
@@ -38,6 +39,8 @@ All notable changes to tuldMi are documented here. Format: [Keep a Changelog](ht
 - Upgrading or uninstalling while an AI assistant is running `tuldmi-mcp` no longer fails to
   replace it: the installer stops `tuldmi-mcp` and `tuldmi-speakers` first.
 - THIRD_PARTY_NOTICES.md now also covers `tuldmi-mcp`'s and `tuldmi-speakers`' dependencies.
+- The installed app now carries the license texts of the libraries and models it ships (a
+  `licenses` folder beside the app, with THIRD_PARTY_NOTICES.md).
 
 ## [0.3.0] — 2026-11-08
 

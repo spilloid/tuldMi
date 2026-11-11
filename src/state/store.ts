@@ -1,5 +1,5 @@
 import type { Backend } from "../lib/ipc/backend";
-import { errorMessage } from "../lib/ipc/backend";
+import { compareEvents, errorMessage } from "../lib/ipc/backend";
 import type {
   CaptureStatus,
   LevelFrame,
@@ -126,13 +126,14 @@ export class AppStore {
 
   async start() {
     const b = this.backend;
+    // A fresh start (also after stop(), as React's strict mode does) re-reads the timeline from
+    // scratch: anything kept from before may have missed updates while unsubscribed.
+    this.resetTimeline();
     this.unsubs.push(
       b.on("tuldmi://status", (s) => this.status.set(s)),
       b.on("tuldmi://levels", (f) => this.levels.push(f)),
       b.on("tuldmi://event-upserted", (ev) => this.onUpsert(ev)),
-      b.on("tuldmi://event-deleted", (id) =>
-        this.timeline.update((t) => ({ ...t, events: t.events.filter((e) => e.id !== id) })),
-      ),
+      b.on("tuldmi://event-deleted", (id) => this.forget(id)),
       b.on("tuldmi://model-progress", (p) => this.onProgress(p)),
     );
     // Levels can stop without a final frame; decay the summary so "speaking" doesn't stick.
@@ -153,65 +154,190 @@ export class AppStore {
     this.unsubs.forEach((u) => u());
     this.unsubs = [];
     if (this.summaryTimer) clearInterval(this.summaryTimer);
+    this.epoch++;
   }
 
   // ---- timeline ----------------------------------------------------------------------------
 
-  async loadInitial() {
+  /** Bumped by stop(): a page answered for an earlier start is dropped, not merged. */
+  private epoch = 0;
+  /** The first page while it's being fetched: navigation waits for it, so it never races it. */
+  private initial: Promise<void> | null = null;
+  /** The oldest event of the pages loaded so far: where the next page starts. Kept apart from
+   *  the list, which live updates and navigation also add to, so paging never skips history. */
+  private boundary: Pick<SpeechEvent, "startedAt" | "id"> | null = null;
+  /** Whether history continues below `boundary` (mirrored in the timeline state). */
+  private more = true;
+  /** Updates to history below the pages loaded so far (speaker backfill, Transcribe anyway, a
+   *  retry, a late-stored clip), newest version per id. Shown as soon as their page is in, so
+   *  the list stays contiguous and a range or conversation copy never silently misses events. */
+  private held = new Map<string, SpeechEvent>();
+  /** Deleted while a page may still be on its way: a page answered before the delete must not
+   *  bring them back. */
+  private deleted = new Set<string>();
+  private older: Promise<void> | null = null;
+  /** The first page failed: nothing to anchor to, so live updates show rather than wait. */
+  private initialFailed = false;
+  /** When this start began: with no page to anchor to, only speech from about then on is shown
+   *  live (older history still waits, so a retried first page places it without a hole). */
+  private startedAt = Date.now();
+
+  private resetTimeline() {
+    this.boundary = null;
+    this.more = true;
+    this.held.clear();
+    this.deleted.clear();
+    this.initial = null;
+    this.older = null;
+    this.initialFailed = false;
+    this.startedAt = Date.now();
+    this.timeline.set({ events: [], loading: true, hasMore: true, error: null, arrivals: [] });
+  }
+
+  private forget(id: string) {
+    this.held.delete(id);
+    this.deleted.add(id);
+    this.timeline.update((t) => ({ ...t, events: t.events.filter((e) => e.id !== id) }));
+  }
+
+  loadInitial(): Promise<void> {
+    const run = this.fetchInitial();
+    this.initial = run;
+    void run.finally(() => {
+      if (this.initial === run) this.initial = null;
+    });
+    return run;
+  }
+  private async fetchInitial() {
+    const epoch = this.epoch;
+    this.initialFailed = false;
     this.timeline.update((t) => ({ ...t, loading: true, error: null }));
     try {
       const page = await this.backend.listEvents(null, PAGE);
+      if (epoch !== this.epoch) return;
+      this.paged(page);
       this.timeline.update((t) => ({
         ...t,
-        events: mergeEvents(t.events, page),
+        events: this.release(this.merge(t.events, page)),
         loading: false,
-        hasMore: page.length >= PAGE,
       }));
     } catch (e) {
-      this.timeline.update((t) => ({ ...t, loading: false, error: errorMessage(e) }));
+      if (epoch !== this.epoch) return;
+      this.initialFailed = !this.boundary;
+      // No page to anchor to: show what arrived live rather than hold it with nothing to wait for.
+      const live = this.boundary ? [] : this.takeHeld((ev) => this.isLive(ev));
+      this.timeline.update((t) => ({ ...t, events: mergeEvents(t.events, live), loading: false, error: errorMessage(e) }));
     }
   }
 
-  private loadingOlder = false;
-  async loadOlder() {
-    const t = this.timeline.get();
-    if (this.loadingOlder || !t.hasMore || t.events.length === 0) return;
-    this.loadingOlder = true;
-    this.timeline.set({ ...t, loading: true });
-    try {
-      const oldest = t.events[0];
-      const page = await this.backend.listEvents({ before: oldest.startedAt, beforeId: oldest.id }, PAGE);
-      this.timeline.update((cur) => ({
-        ...cur,
-        events: mergeEvents(cur.events, page),
-        loading: false,
-        hasMore: page.length >= PAGE,
-      }));
-    } catch (e) {
-      this.timeline.update((cur) => ({ ...cur, loading: false, error: errorMessage(e) }));
-    } finally {
-      this.loadingOlder = false;
-    }
+  /** A page merged in, minus anything deleted while it was on its way. Versions already in the
+   *  list came from later notifications than the page, so they win. */
+  private merge(events: SpeechEvent[], page: SpeechEvent[]): SpeechEvent[] {
+    const have = new Set(events.map((e) => e.id));
+    return mergeEvents(events, page.filter((e) => !this.deleted.has(e.id) && !have.has(e.id)));
   }
 
-  /** Ensure an event (e.g. a search hit) is loaded, paging back until it is. */
+  private paged(page: SpeechEvent[]) {
+    if (page.length > 0) this.boundary = page[page.length - 1];
+    this.more = page.length >= PAGE;
+    this.timeline.update((t) => ({ ...t, hasMore: this.more }));
+  }
+
+  private takeHeld(due: (ev: SpeechEvent) => boolean): SpeechEvent[] {
+    const out: SpeechEvent[] = [];
+    for (const [id, ev] of this.held) {
+      if (due(ev)) {
+        out.push(ev);
+        this.held.delete(id);
+      }
+    }
+    return out;
+  }
+
+  /** `events` plus every held update now within the loaded pages (all of them at the end).
+   *  Held versions came from notifications, so they replace a page's copy. */
+  private release(events: SpeechEvent[]): SpeechEvent[] {
+    const b = this.boundary;
+    const due = this.takeHeld((ev) => !this.more || (b !== null && compareEvents(ev, b) >= 0));
+    return due.length ? mergeEvents(events, due) : events;
+  }
+
+  /** Load the next page of history. Concurrent calls share the one in flight. */
+  loadOlder(): Promise<void> {
+    if (this.older) return this.older;
+    const oldest = this.boundary;
+    // No first page yet (it failed): scrolling up retries it.
+    if (!oldest) return this.more && !this.initial ? this.loadInitial() : Promise.resolve();
+    if (!this.more) return Promise.resolve();
+    const epoch = this.epoch;
+    let run!: Promise<void>;
+    run = (async () => {
+      this.timeline.update((t) => ({ ...t, loading: true }));
+      try {
+        const page = await this.backend.listEvents({ before: oldest.startedAt, beforeId: oldest.id }, PAGE);
+        if (epoch !== this.epoch) return;
+        this.paged(page);
+        this.timeline.update((cur) => ({
+          ...cur,
+          events: this.release(this.merge(cur.events, page)),
+          loading: false,
+        }));
+      } catch (e) {
+        if (epoch !== this.epoch) return;
+        // The boundary stays put, which is how a caller paging in a loop sees it failed.
+        this.timeline.update((cur) => ({ ...cur, loading: false, error: errorMessage(e) }));
+      } finally {
+        if (this.older === run) this.older = null;
+      }
+    })();
+    this.older = run;
+    return run;
+  }
+
+  /** Ensure an event (e.g. a search hit) is loaded, paging back until it is. Null if it doesn't
+   *  exist or its history couldn't be loaded. */
   async ensureLoaded(id: string): Promise<SpeechEvent | null> {
-    const have = this.timeline.get().events.find((e) => e.id === id);
-    if (have) return have;
-    const ev = await this.backend.getEvent(id);
-    if (!ev) return null;
-    // Load everything between the target and what we have, so the timeline stays contiguous.
-    let guard = 0;
-    while (guard++ < 50) {
-      const t = this.timeline.get();
-      if (!t.hasMore || t.events.length === 0 || t.events[0].startedAt <= ev.startedAt) break;
-      await this.loadOlder();
+    if (this.initial) await this.initial;
+    const find = () => this.timeline.get().events.find((e) => e.id === id) ?? null;
+    if (find()) return find();
+    if (!this.boundary && this.more) {
+      // The first page failed (or never ran): try it once more, never show an island.
+      await this.loadInitial();
+      if (find()) return find();
+      if (!this.boundary && this.more) return null;
     }
-    this.timeline.update((t) => ({ ...t, events: mergeEvents(t.events, [ev]) }));
-    return ev;
+    const ev = await this.backend.getEvent(id);
+    if (!ev || this.deleted.has(ev.id)) return null;
+    // Load everything between the target and what we have, so the timeline stays contiguous
+    // (every page, however far back: a range copy must never have a hole in it).
+    while (this.more && this.boundary && compareEvents(this.boundary, ev) > 0) {
+      const before = this.boundary;
+      await this.loadOlder();
+      if (this.boundary === before) break;
+    }
+    // Paging (or a notification) brought it in: that copy is at least as new as ours.
+    if (find()) return find();
+    if (this.more && this.boundary && compareEvents(ev, this.boundary) < 0) return null; // a page failed
+    if (this.deleted.has(ev.id)) return null;
+    const held = this.held.get(ev.id);
+    this.held.delete(ev.id);
+    this.timeline.update((t) => ({ ...t, events: mergeEvents(t.events, [held ?? ev]) }));
+    return find();
+  }
+
+  /** Speech from this start on (with a margin for an utterance already under way). */
+  private isLive(ev: SpeechEvent) {
+    return ev.startedAt >= this.startedAt - 10 * 60_000;
   }
 
   private onUpsert(ev: SpeechEvent) {
+    // Below the loaded pages, or before the first page is in: hold it until its page is.
+    const waiting = this.boundary ? compareEvents(ev, this.boundary) < 0 : !(this.initialFailed && this.isLive(ev));
+    if (this.more && waiting && !this.timeline.get().events.some((e) => e.id === ev.id)) {
+      // (Before the first page this includes new live speech; that page releases it at once.)
+      this.held.set(ev.id, ev);
+      return;
+    }
     this.timeline.update((t) => {
       const isNew = !t.events.some((e) => e.id === ev.id);
       return {

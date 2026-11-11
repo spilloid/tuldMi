@@ -236,6 +236,8 @@ fn setup(app: &AppHandle) -> Result<(), String> {
     if !(minimized && settings.onboarding_complete) {
         window::show_main(app);
     }
+    // macOS CI waits for this line: setup got all the way through.
+    tracing::info!("tuldMi ready");
     Ok(())
 }
 

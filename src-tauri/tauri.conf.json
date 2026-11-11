@@ -46,7 +46,9 @@
     "resources": {
       "resources/ggml-silero-v6.2.0.bin": "ggml-silero-v6.2.0.bin",
       "resources/ced-tiny-audioset.int8.onnx": "ced-tiny-audioset.int8.onnx",
-      "resources/audioset-labels.csv": "audioset-labels.csv"
+      "resources/audioset-labels.csv": "audioset-labels.csv",
+      "licenses/": "licenses/",
+      "../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md"
     },
     "licenseFile": "../LICENSE",
     "windows": {

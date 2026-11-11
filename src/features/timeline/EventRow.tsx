@@ -14,7 +14,7 @@ import { Waveform } from "../../components/viz/Waveform";
 import { Button } from "../../components/ui/Button";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { audioAvailability, usePlayer } from "../../state/player";
-import { useBackend } from "../../state/hooks";
+import { useBackend, useSettings } from "../../state/hooks";
 import { useEventActions } from "./actions";
 
 interface Props {
@@ -338,6 +338,18 @@ export function isMusic(ev: SpeechEvent): boolean {
   return ev.status === "empty" && ev.error === MUSIC_NOTE;
 }
 
+/** Under Delete after transcription, music audio (and with it Transcribe anyway) has a deadline:
+ *  say so while it can still be used, not only once it's gone. */
+export function MusicKept() {
+  const { settings } = useSettings();
+  if (settings?.retention !== "deleteAfterTranscription") return null;
+  return (
+    <span title="With Delete after transcription, music audio is removed 24 hours after it was judged music. Until then it can be transcribed anyway.">
+      · audio kept 24 h
+    </span>
+  );
+}
+
 /** The collapsed Music row: what it is, how long, and a way out if it's wrong. */
 function MusicBody({ ev }: { ev: SpeechEvent }) {
   const actions = useEventActions();
@@ -345,6 +357,8 @@ function MusicBody({ ev }: { ev: SpeechEvent }) {
     <div className="flex items-center gap-2 py-0.5 text-base text-faint">
       <Music size={14} aria-hidden />
       <span className="italic">Music · {humanDuration(ev.endedAt - ev.startedAt)}</span>
+      {!ev.audio && ev.audioExpired && <span title="Its audio was removed, so it can't be transcribed now">· audio removed</span>}
+      {ev.audio && <MusicKept />}
       {ev.audio && (
         <button
           type="button"

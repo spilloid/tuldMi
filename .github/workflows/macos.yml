@@ -90,6 +90,10 @@ jobs:
           test -f "$app/Contents/Resources/ggml-silero-v6.2.0.bin"
           test -f "$app/Contents/Resources/ced-tiny-audioset.int8.onnx"
           test -f "$app/Contents/Resources/audioset-labels.csv"
+          # Third-party license texts ship with the app (Apache-2.0 §4, MIT, BSD).
+          for f in README.txt THIRD_PARTY_NOTICES.md third-party-licenses.txt Apache-2.0.txt onnxruntime-ThirdPartyNotices.txt hclust-cpp-LICENSE.txt darts-clone-LICENSE.txt whisper.cpp-LICENSE.txt; do
+            test -s "$app/Contents/Resources/licenses/$f"
+          done
           exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")"
           lipo -archs "$exe" | grep -qx arm64
           # tuldmi-mcp finds the app as its sibling `tuldmi`, and must run on its own.
@@ -111,7 +115,9 @@ jobs:
           if otool -L "$spk" | tail -n +2 | grep -v -E '^\s+(/System/Library/|/usr/lib/)'; then
             echo "tuldmi-speakers links a non-system library"; exit 1
           fi
-          if nm "$spk" 2>/dev/null | grep -q espeak_ng; then
+          # Search the binary itself: release builds are stripped (nm sees nothing), and
+          # `nm | grep -q` under pipefail reads a match as a SIGPIPE failure.
+          if grep -a -c espeak_ng "$spk" > /dev/null; then
             echo "tuldmi-speakers contains espeak-ng (GPL): use the no-TTS sherpa-onnx libraries"; exit 1
           fi
           mkdir -p dist
@@ -121,6 +127,25 @@ jobs:
           if tail -n +2 dist/macos-linked-libraries.txt | grep -v -E '^\s+(/System/Library/|/usr/lib/)'; then
             echo "non-system library linked"; exit 1
           fi
+          # Asking a tuldMi that isn't running to pause exits 3 (PAUSE_NOT_RUNNING) at once.
+          set +e; "$exe" --pause; code=$?; set -e
+          test "$code" = 3 || { echo "tuldmi --pause with nothing running exited $code"; exit 1; }
+          # Launch the bundled app for real: setup must get all the way through ("tuldMi ready",
+          # logged last). A config that lets Tauri build the main window too fails setup early.
+          logs="$HOME/Library/Application Support/com.spillerstech.tuldmi/logs"
+          rm -rf "$logs"
+          "$exe" > launch.log 2>&1 &
+          pid=$!
+          started=""
+          for _ in $(seq 1 90); do
+            sleep 1
+            kill -0 "$pid" 2>/dev/null || { echo "tuldMi exited during startup:"; cat launch.log; exit 1; }
+            if grep -qs "tuldMi ready" "$logs/"tuldmi.log*; then started=1; break; fi
+          done
+          test -n "$started" || { echo "tuldMi never finished starting:"; cat launch.log; cat "$logs/"tuldmi.log* 2>/dev/null || true; exit 1; }
+          sleep 5
+          kill -0 "$pid" 2>/dev/null || { echo "tuldMi exited after starting:"; cat launch.log; exit 1; }
+          kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
           hdiutil verify "$dmg"
           cp "$dmg" dist/
           (cd dist && shasum -a 256 "tuldMi_${v}_aarch64.dmg" > "tuldMi_${v}_aarch64.dmg.sha256" && cat ./*.sha256)
