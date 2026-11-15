@@ -1,18 +1,22 @@
-//! Local transcription seam.
+//! Local-first transcription seam, with explicit opt-in server processing.
 //!
-//! `whisper::WhisperProvider` (feature `whisper`) runs whisper.cpp through `whisper-rs` on CPU:
+//! `whisper::WhisperProvider` (feature `whisper`) runs whisper.cpp through `whisper-rs`,
+//! with native Metal/Vulkan offload (`whisper-gpu`) and CPU fallback:
 //! greedy decoding, `no_context`, timestamps per segment, language from settings ("auto" =
-//! detect), threads = available parallelism minus one (min 1, max 8). Segment confidence = mean
+//! detect), CPU threads = half the logical processors (min 1, max 6). Segment confidence = mean
 //! token probability. Guard against Whisper's well-known silence hallucinations ("Thank you.",
 //! "you", subtitle credits): drop segments whose no-speech probability is high or whose text is a
 //! known hallucination phrase on low-energy audio. Model load is lazy and happens on the
 //! transcription thread, never the capture path.
 
+pub mod credentials;
+pub(crate) mod queue;
+pub mod remote;
 #[cfg(feature = "whisper")]
 pub mod whisper;
 
-use crate::storage::NewSegment;
 use crate::Result;
+use crate::storage::NewSegment;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Transcript {
@@ -32,13 +36,20 @@ pub const MIN_TRANSCRIBE_SAMPLES: usize = 1_600;
 /// empty transcript for such audio *without* inference, so callers must not treat that result
 /// as "transcribed" (e.g. delete-after-transcription keeps such audio).
 pub fn below_energy_gate(samples_16k: &[f32]) -> bool {
-    let rms = (samples_16k.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>()
+    let rms = (samples_16k
+        .iter()
+        .map(|&s| f64::from(s).powi(2))
+        .sum::<f64>()
         / samples_16k.len().max(1) as f64)
         .sqrt();
     samples_16k.len() < MIN_TRANSCRIBE_SAMPLES || rms < MIN_TRANSCRIBE_RMS
 }
 
 pub trait TranscriptionProvider: Send {
+    /// Actual backend when it can be verified; never infer GPU use from a requested flag.
+    fn backend_label(&self) -> Option<&str> {
+        None
+    }
     /// Catalog id of the loaded model, e.g. "whisper-base.en".
     fn model_id(&self) -> &str;
     /// 16 kHz mono f32. `language`: None or "auto" = detect.

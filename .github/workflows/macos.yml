@@ -12,6 +12,16 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Runner (xlarge has Metal GPU support and uses metered larger-runner billing)'
+        type: choice
+        options: [macos-15, macos-15-xlarge]
+        default: macos-15
+      require_metal:
+        description: 'Fail if Metal hardware inference cannot be verified'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -20,7 +30,7 @@ concurrency:
 jobs:
   build:
     name: ARM64 clippy, tests, disk image
-    runs-on: macos-15
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'macos-15' }}
     timeout-minutes: 75
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.4'
@@ -66,8 +76,28 @@ jobs:
       - run: npm run build
       # sherpa-onnx's pinned, hash-checked no-TTS libraries (SHERPA_ONNX_LIB_DIR) for tuldmi-speakers.
       - run: node scripts/sherpa-libs.mjs
+      # The default GPU feature selects native Metal here, never Vulkan.
+      - run: python3 scripts/check-gpu-features.py
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked -p tuldmi-engine -p tuldmi -p tuldmi-mcp -p tuldmi-speakers
+      - name: Real speech, CPU fallback and Metal when a device is exposed
+        run: bash scripts/verify-macos-gpu.sh "$MODE"
+        env:
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.require_metal && 'require-metal' || 'auto' }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tuldMi-macos-gpu-validation
+          path: scratch/gpu-validation/*.log
+          if-no-files-found: warn
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tuldMi-macos-gpu-result
+          path: scratch/gpu-validation/*.txt
+          if-no-files-found: warn
+          retention-days: 14
       - name: Bundle (app + dmg, ad-hoc signed, with tuldmi-mcp and tuldmi-speakers)
         run: |
           node scripts/build-sidecars.mjs aarch64-apple-darwin
@@ -96,6 +126,9 @@ jobs:
           done
           exe="$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")"
           lipo -archs "$exe" | grep -qx arm64
+          # Framework linkage and embedded shader source must survive app bundling.
+          otool -L "$exe" | grep '/Metal.framework/' > /dev/null
+          otool -l "$exe" | grep '__ggml_metallib' > /dev/null
           # tuldmi-mcp finds the app as its sibling `tuldmi`, and must run on its own.
           test "$(basename "$exe")" = tuldmi
           mcp="$app/Contents/MacOS/tuldmi-mcp"

@@ -45,6 +45,7 @@ export function useEventActions() {
     retry: async (ev: SpeechEvent) => {
       try {
         const ok = await backend.retryEvent(ev.id);
+        if (ok && ev.status === "queued") toast.show({ level: "info", message: "Queued to transcribe next. The current clip will finish first." });
         if (!ok) toast.show({ level: "warning", message: "This event can't be retried right now." });
       } catch (e) {
         toast.show({ level: "error", title: "Retry failed", message: errorMessage(e) });

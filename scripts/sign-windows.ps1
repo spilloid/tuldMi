@@ -77,5 +77,6 @@ try {
         }
     }
 } finally {
-    Remove-Item $metadataDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $metadata -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $metadataDir -Force -ErrorAction SilentlyContinue
 }

@@ -5,12 +5,33 @@ Builds the tuldMi Windows installer, optionally Authenticode-signed, and verifie
 .EXAMPLE
 ./scripts/release.ps1 -Sign      # signed release build (needs `az login` + signer role)
 ./scripts/release.ps1            # unsigned local build
+./scripts/release.ps1 -CpuOnly   # fallback installer without Vulkan loader dependency
 #>
-param([switch]$Sign)
+param([switch]$Sign, [switch]$CpuOnly, [string]$TargetDir = $env:CARGO_TARGET_DIR)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
+$releasePath = $env:PATH
+$releaseTargetDir = $env:CARGO_TARGET_DIR
+$releaseGenerator = $env:CMAKE_GENERATOR
 Push-Location $repo
 try {
+    # whisper.cpp's nested shader-generator project exceeds Windows MAX_PATH in
+    # deep repository checkouts. Keep native build output at a short path.
+    if (-not $TargetDir) { $TargetDir = "$env:SystemDrive\tuldmi-build" }
+    $TargetDir = [IO.Path]::GetFullPath($TargetDir)
+    $env:CARGO_TARGET_DIR = $TargetDir
+    if (-not $CpuOnly) {
+        if (-not $env:CMAKE_GENERATOR) { $env:CMAKE_GENERATOR = 'Ninja' }
+        if ($env:CMAKE_GENERATOR -eq 'Ninja' -and -not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            throw 'The Vulkan build needs Ninja on PATH (MSVC remains the compiler). See docs/GPU.md.'
+        }
+        if (-not $env:VULKAN_SDK -or
+            -not (Test-Path (Join-Path $env:VULKAN_SDK 'Bin\glslc.exe')) -or
+            -not (Test-Path (Join-Path $env:VULKAN_SDK 'Lib\vulkan-1.lib'))) {
+            throw 'The default GPU build needs the Vulkan SDK. Set VULKAN_SDK to its root, or use -CpuOnly. See docs/GPU.md.'
+        }
+        $env:PATH = "$(Join-Path $env:VULKAN_SDK 'Bin');$env:PATH"
+    }
     # Windows PowerShell 5.1 turns a native tool's stderr into terminating errors under 'Stop';
     # npm and the Tauri CLI log progress to stderr, so judge them by exit code only.
     $ErrorActionPreference = 'Continue'
@@ -34,12 +55,18 @@ try {
         [IO.File]::WriteAllText($overlayPath, $overlay, (New-Object System.Text.UTF8Encoding $false))
         $tauriArgs += @('--config', $overlayPath)
     }
+    if ($CpuOnly) { $tauriArgs += @('--', '--no-default-features') }
     npx @tauriArgs
     if ($LASTEXITCODE -ne 0) { throw 'tauri build failed' }
     $ErrorActionPreference = 'Stop'
 
     $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-    $installer = Join-Path $repo "target\release\bundle\nsis\tuldMi_${version}_x64-setup.exe"
+    $installer = Join-Path $TargetDir "release\bundle\nsis\tuldMi_${version}_x64-setup.exe"
+    # Keep variant names distinct, including their checksum, when building both.
+    $variant = if ($CpuOnly) { 'cpu' } else { 'vulkan' }
+    $variantInstaller = Join-Path (Split-Path $installer -Parent) "tuldMi_${version}_x64-${variant}-setup.exe"
+    Copy-Item -LiteralPath $installer -Destination $variantInstaller -Force
+    $installer = $variantInstaller
     # Only the installer is checked: Tauri signs tuldmi.exe before packing it, then restores its
     # unpatched build output in target\release, so that copy always reads NotSigned. The signed
     # exe is the one inside the installer (verified by installing; see docs/RELEASE.md).
@@ -64,6 +91,9 @@ try {
     [IO.File]::WriteAllText("$installer.sha256", "$hash  $(Split-Path $installer -Leaf)`n", (New-Object System.Text.UTF8Encoding $false))
     Write-Host "SHA-256 $hash"
 } finally {
+    $env:PATH = $releasePath
+    $env:CARGO_TARGET_DIR = $releaseTargetDir
+    $env:CMAKE_GENERATOR = $releaseGenerator
     if ($overlayPath) { Remove-Item $overlayPath -ErrorAction SilentlyContinue }
     Pop-Location
 }

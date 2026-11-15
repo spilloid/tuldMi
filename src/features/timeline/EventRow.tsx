@@ -85,6 +85,7 @@ export const EventRow = memo(function EventRow({ ev, showLabel, showTime, select
             aria-expanded={expanded}
             aria-label={`${runs[0]?.label ?? sourceLabel(ev)} at ${clock(ev.startedAt)}: ${summaryText(ev)}`}
             onKeyDown={(e) => {
+              if (e.target !== e.currentTarget) return;
               if (e.key === "Enter") {
                 e.preventDefault();
                 onToggle(ev.id);
@@ -206,6 +207,7 @@ function EventBody({ ev, runs, order, onRetry }: { ev: SpeechEvent; runs: Speake
         <div className="mt-1.5 flex items-center gap-1.5 text-xs text-faint">
           <FileClock size={12} aria-hidden />
           {ev.status === "transcribing" ? "Transcribing…" : "Waiting in queue"} · {humanDuration(dur)} of speech
+          {ev.status === "queued" && <Button size="sm" variant="ghost" onClick={onRetry} disabled={!ev.audio}>Transcribe next</Button>}
         </div>
       </div>
     );

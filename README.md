@@ -4,8 +4,8 @@
 
 tuldMi sits quietly in your system tray, listens to the microphone and system audio you allow,
 keeps only the speech, transcribes it on your computer, and gives you a calm, searchable,
-playable timeline of what was said. Nothing leaves your device unless you connect an AI assistant
-(off by default).
+playable timeline of what was said. Processing is local by default; optional server processing
+offloads queued speech to OpenAI or your own authenticated service.
 
 ![tuldMi timeline](docs/screenshots/timeline-dark.png)
 
@@ -53,11 +53,12 @@ playable timeline of what was said. Nothing leaves your device unless you connec
 
 ## Privacy
 
-No accounts, no telemetry, no cloud. The only network requests tuldMi ever makes are downloading
-models you explicitly choose (transcription, and optionally speaker separation), verified by
-SHA-256. Recording conversations is
+No telemetry or cloud dependency. Local mode only downloads models you explicitly choose,
+verified by SHA-256. Opt-in server mode uploads queued and future speech to your configured
+service using an OpenAI API key or Authentik sign-in for your own server; see
+[cloud setup and costs](docs/CLOUD-COSTS.md) and [server setup](docs/SERVER.md). Recording conversations is
 regulated — you are responsible for consent laws and workplace policy. Full details, including
-what is **not** yet protected (no encryption at rest yet): [docs/PRIVACY.md](docs/PRIVACY.md).
+what is **not** yet protected (no encryption at rest): [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## Platforms
 
@@ -88,6 +89,10 @@ Requirements: Rust stable, Node 22+, and a C/C++ toolchain with CMake and libcla
 Visual Studio Build Tools + LLVM; macOS: Xcode command line tools + CMake). See
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+The Windows app now enables Vulkan acceleration by default. Windows GPU builds also require the Vulkan
+SDK and Ninja; see [GPU setup and measured performance](docs/GPU.md). A CPU-only build remains
+available. Mac builds select Metal automatically. Optional OpenAI key setup and eight-hour cost math: [cloud transcription](docs/CLOUD-COSTS.md).
+
 ```
 npm install
 npm run tauri dev      # the app
@@ -112,7 +117,9 @@ Models and licenses: [docs/MODELS.md](docs/MODELS.md) · Releasing: [docs/RELEAS
   Your own microphone is never split, so people in the room with you are all "Me".
 - No encryption at rest (database and audio are protected by your OS account / disk
   encryption only).
-- CPU transcription only (no GPU acceleration yet); large models are slow on modest CPUs.
+- Windows GPU builds require a Vulkan-capable driver and its loader; Macs use Metal. A separate CPU build is available.
+  First inference can include substantial shader warmup; sustained capture capacity still needs
+  validation on your workload. See [GPU measurements](docs/GPU.md).
 - Physically unplugging a device and switching the default device are handled in code and in
   tests with a simulated device, but have not yet been exercised on real hardware.
 - No timeline virtualization yet — very long histories (many thousands of events) will get heavy.

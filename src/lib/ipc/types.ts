@@ -31,9 +31,11 @@ export interface CaptureStatus {
   sources: SourceStatus[];
   /** Speech events waiting for or undergoing transcription. */
   backlog: number;
+  queue: QueueStatus;
   /** Id of the active transcription model, if one is installed and loaded. */
   modelId: string | null;
   transcriber: TranscriberState;
+  transcriptionBackend: string | null;
   /** Remote speaker separation (docs/design/speakers.md). */
   separation: SeparationStatus;
 }
@@ -69,6 +71,17 @@ export interface DeviceInfo {
 }
 
 export type EventStatus = "queued" | "transcribing" | "done" | "empty" | "failed";
+
+export interface QueueStatus {
+  audioMs: number;
+  oldestEventId: string | null;
+  oldestStartedAt: number | null;
+  processingMs: number | null;
+  catchUpMs: number | null;
+  fallingBehind: boolean;
+}
+export interface RemoteTranscription { endpoint: string; model: string; issuer: string; clientId: string; authentication: "authentik" | "apiKey" }
+export interface DeviceLogin { userCode: string; verificationUri: string; interval: number; expiresIn: number }
 
 export interface Speaker {
   id: Uuid;
@@ -194,6 +207,7 @@ export interface Settings {
   modelId: string | null;
   /** "auto" or an ISO-639-1 code. */
   language: string;
+  remoteTranscription: RemoteTranscription | null;
   launchAtLogin: boolean;
   /** Tauri accelerator string. */
   pauseShortcut: string;
@@ -229,6 +243,7 @@ export const DEFAULT_SETTINGS: Settings = {
   retention: "days30",
   modelId: null,
   language: "auto",
+  remoteTranscription: null,
   launchAtLogin: false,
   pauseShortcut: "CommandOrControl+Shift+Backquote",
   theme: "system",

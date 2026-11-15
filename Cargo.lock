@@ -2435,6 +2435,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyring"
+version = "3.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
+dependencies = [
+ "byteorder",
+ "log",
+ "windows-sys 0.60.2",
+ "zeroize",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2619,6 +2631,16 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "mime_guess"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
+dependencies = [
+ "mime",
+ "unicase",
+]
 
 [[package]]
 name = "minimal-lexical"
@@ -3691,6 +3713,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -5333,7 +5356,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tuldmi"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "parking_lot",
  "serde",
@@ -5354,13 +5377,14 @@ dependencies = [
 
 [[package]]
 name = "tuldmi-engine"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "cpal",
  "crossbeam-channel",
  "fs4",
  "hound",
+ "keyring",
  "objc2",
  "objc2-core-audio",
  "objc2-core-audio-types",
@@ -5380,11 +5404,12 @@ dependencies = [
  "tracing",
  "uuid",
  "whisper-rs",
+ "whisper-rs-sys",
 ]
 
 [[package]]
 name = "tuldmi-mcp"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5398,7 +5423,7 @@ dependencies = [
 
 [[package]]
 name = "tuldmi-speakers"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "hound",
  "parking_lot",
@@ -5431,6 +5456,12 @@ dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "unicase"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
 
 [[package]]
 name = "unicode-ident"

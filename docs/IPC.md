@@ -6,6 +6,19 @@ returns `Result<T, String>`; the error string is user-presentable.
 
 ## Commands
 
+Server opt-in is `Settings.remoteTranscription` (`endpoint`, `model`, `issuer`, `clientId`,
+`authentication`), null by default. `authentication` is `authentik` (also the default when omitted)
+or `apiKey`. API-key mode only accepts the official OpenAI transcription endpoint and supported
+model IDs. The key is stored separately in Windows Credential Manager, never in this object.
+`begin_remote_sign_in` opens the validated Authentik verification URL and
+returns `{ userCode, verificationUri, interval, expiresIn }`. `poll_remote_sign_in` returns a
+boolean; poll at the returned interval. Tokens are held only by the engine, never exposed over
+IPC. `CaptureStatus.queue` reports `audioMs`, `oldestEventId`, `oldestStartedAt`, `processingMs`,
+`catchUpMs` and `fallingBehind`. Null estimates mean measuring/blocked, not zero wait.
+`retry_event` also accepts queued events, moving them to the head after any running work.
+`CaptureStatus.transcriptionBackend` reports observed `Metal`/`Vulkan`/`CPU`, `OpenAI`, `Server`, or null
+when no backend can be verified. A requested GPU setting alone is not an active backend.
+
 | Command | Args | Returns | Notes |
 |---|---|---|---|
 | `get_status` | — | `CaptureStatus` | |
@@ -13,6 +26,11 @@ returns `Result<T, String>`; the error string is user-presentable.
 | `set_monitoring` | `enabled: bool` | `CaptureStatus` | Onboarding mic test: devices open, `levels` flow, **nothing is stored**. Ignored while recording. |
 | `list_devices` | — | `DeviceInfo[]` | Inputs and loopback-capable outputs. |
 | `get_settings` | — | `Settings` | |
+| `has_transcription_api_key` | — | `boolean` | Credential presence only; never returns the secret. |
+| `set_transcription_api_key` | `key: string` | `void` | Saves to the OS credential store; does not enable uploads. |
+| `delete_transcription_api_key` | — | `void` | Removes the saved credential. |
+| `begin_remote_sign_in` | — | `DeviceLogin` | Starts Authentik device authorization and opens the validated verification URL. |
+| `poll_remote_sign_in` | — | `boolean` | True when authorized; honor the device-flow interval. |
 | `update_settings` | `settings: Settings` | `Settings` | Whole object. Engine re-opens devices if sources changed; registers new shortcut; applies autostart. |
 | `list_events` | `before?: number, beforeId?: string, limit: number` | `SpeechEvent[]` | Newest first, keyset cursor on `(startedAt, id)` of the last event of the previous page, so equal start times are never skipped. |
 | `get_event` | `id: string` | `SpeechEvent \| null` | |

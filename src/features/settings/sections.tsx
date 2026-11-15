@@ -18,6 +18,8 @@ import { MonitoringNote } from "../shared/MonitoringNote";
 import { useAppVersion } from "../../lib/version";
 import { IN_APP_SHORTCUTS } from "../shortcuts/ShortcutSheet";
 import { Group, Row, SectionHeader } from "./parts";
+import { ServerTranscription } from "./ServerTranscription";
+import { queueMessage } from "../../lib/queue";
 import { SpeakersGroup } from "./SpeakersGroup";
 
 /** Save a settings patch, surfacing engine errors as toasts. */
@@ -150,16 +152,18 @@ export function TranscriptionSection() {
         ? { tone: "danger" as const, text: "Engine error" }
         : status?.transcriber === "loading"
           ? { tone: "neutral" as const, text: "Loading model…" }
-          : { tone: "success" as const, text: status?.backlog ? `Working · ${status.backlog} queued` : "Ready" };
+          : status?.queue?.fallingBehind
+            ? { tone: "warning" as const, text: "Falling behind" }
+            : { tone: "success" as const, text: status?.backlog ? `Working · ${status.backlog} queued` : "Ready" };
   return (
     <>
       <SectionHeader
         title="Transcription"
-        description="Speech is transcribed by a model running on this computer. Models are downloaded once, only when you ask, and never leave your device."
+        description={settings.remoteTranscription ? "Queued speech is transcribed on your configured server. Recording, playback and your transcript library stay on this computer." : "Speech is transcribed on this computer. You can opt in to server processing below when local processing cannot keep up."}
       />
       <Group>
-        <Row label="Engine status" description="Capture never waits for transcription — a backlog simply catches up.">
-          <Pill tone={engine.tone}>{engine.text}</Pill>
+        <Row label="Engine status" description={status ? queueMessage(status).detail : "Measuring queue health…"}>
+          <Pill tone={engine.tone}>{status?.transcriptionBackend ? `${status.transcriptionBackend} · ` : ""}{engine.text}</Pill>
         </Row>
         <Row
           label="Skip music"
@@ -172,8 +176,9 @@ export function TranscriptionSection() {
           <Select label="Spoken language" value={settings.language} options={LANGUAGES} onChange={(v) => void save({ language: v })} className="w-[220px]" />
         </Row>
       </Group>
+      <ServerTranscription settings={settings} save={save} />
       <div className="mb-2 flex items-baseline justify-between px-0.5">
-        <h2 className="caps text-faint">Models</h2>
+        <h2 className="caps text-faint">Local models{settings.remoteTranscription ? " · used when server processing is off" : ""}</h2>
         {stats?.freeDiskBytes != null && <span className="text-xs text-faint tnum">{formatBytes(stats.freeDiskBytes)} free on this drive</span>}
       </div>
       <ModelList freeDisk={stats?.freeDiskBytes} />
@@ -331,8 +336,8 @@ export function PrivacySection() {
       <SectionHeader title="Privacy & data" />
       <div className="mb-7 grid grid-cols-3 gap-2.5 max-[1100px]:grid-cols-1">
         {[
-          ["Stays on this device", "Audio, transcripts and search live in your data folder. There's no account and no cloud."],
-          ["No telemetry", "tuldMi sends nothing about you or your usage. The only network use is a model download you start."],
+          ["Local by default", "Your library lives in your data folder. If you enable server processing, queued and future speech is uploaded to that server."],
+          ["No telemetry", "No analytics or usage reporting. Network use is model downloads and, when you enable it, server transcription and Authentik sign-in."],
           ["You're in control", "Pause from anywhere, turn sources off, set retention, and delete anything at any time."],
         ].map(([t, d]) => (
           <div key={t} className="rounded-xl border border-line bg-surface p-3.5 shadow-1">

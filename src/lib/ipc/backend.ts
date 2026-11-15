@@ -48,6 +48,11 @@ export interface Backend {
   setMonitoring(enabled: boolean): Promise<CaptureStatus>;
   listDevices(): Promise<DeviceInfo[]>;
   getSettings(): Promise<Settings>;
+  beginRemoteSignIn(): Promise<import("./types").DeviceLogin>;
+  pollRemoteSignIn(): Promise<boolean>;
+  hasTranscriptionApiKey(): Promise<boolean>;
+  setTranscriptionApiKey(key: string): Promise<void>;
+  deleteTranscriptionApiKey(): Promise<void>;
   updateSettings(settings: Settings): Promise<Settings>;
   /** Newest first, ordered by (startedAt desc, id desc). The cursor is the oldest event
    *  already held: results are strictly older than (before, beforeId), so events sharing a

@@ -22,13 +22,24 @@
 
 ## Build
 
+The default macOS desktop build includes Metal. Its workflow checks framework linkage,
+embedded shaders and real fixture inference when a Metal device is exposed. Before claiming
+Mac performance, run `bash scripts/verify-macos-gpu.sh require-metal` on an Apple Silicon Mac
+or dispatch the workflow with GPU hardware and `require_metal=true`; a no-device result is
+explicitly unverified. Both sidecars remain CPU-only and independently runnable.
+
+The default Windows desktop build includes Vulkan. Set up the Vulkan SDK and Ninja as described in
+[GPU.md](GPU.md); the end user's GPU driver supplies the Vulkan loader. Use `-CpuOnly` for a
+separate installer that does not require that loader.
+
 ```
 npm ci
 ./scripts/release.ps1 -Sign      # or without -Sign for an unsigned local build
 ```
 
-Output: `target/release/bundle/nsis/tuldMi_<version>_x64-setup.exe` (per-user install, no admin)
-and its `.sha256`.
+Output defaults to `C:\tuldmi-build\release\bundle\nsis\` (override `-TargetDir` or
+`CARGO_TARGET_DIR`). The script preserves `tuldMi_<version>_x64-vulkan-setup.exe` or
+`tuldMi_<version>_x64-cpu-setup.exe` and its `.sha256` (per-user install, no admin).
 
 ## Signing
 
@@ -39,7 +50,7 @@ installer. Prerequisites: `az login` as an identity holding **Artifact Signing C
 Profile Signer** on the profile, the Windows SDK SignTool (10.0.22621+), and
 `winget install -e --id Microsoft.Azure.ArtifactSigningClientTools`.
 
-`target\release\tuldmi.exe` always reads NotSigned after a build (Tauri restores its unpatched
+The build directory's `release\tuldmi.exe` always reads NotSigned after a build (Tauri restores its unpatched
 output); the signed exe is the one inside the installer. Verify by installing
 (`setup.exe /S`) and running `Get-AuthenticodeSignature` on the installed
 `%LOCALAPPDATA%\tuldMi\tuldmi.exe`, `%LOCALAPPDATA%\tuldMi\tuldmi-mcp.exe` (the MCP server

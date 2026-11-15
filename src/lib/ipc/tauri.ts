@@ -22,6 +22,11 @@ export class TauriBackend implements Backend {
   setMonitoring = (enabled: boolean) => invoke<CaptureStatus>("set_monitoring", { enabled });
   listDevices = () => invoke<DeviceInfo[]>("list_devices");
   getSettings = () => invoke<Settings>("get_settings");
+  beginRemoteSignIn = () => invoke<import("./types").DeviceLogin>("begin_remote_sign_in");
+  pollRemoteSignIn = () => invoke<boolean>("poll_remote_sign_in");
+  hasTranscriptionApiKey = () => invoke<boolean>("has_transcription_api_key");
+  setTranscriptionApiKey = (key: string) => invoke<void>("set_transcription_api_key", { key });
+  deleteTranscriptionApiKey = () => invoke<void>("delete_transcription_api_key");
   updateSettings = (settings: Settings) => invoke<Settings>("update_settings", { settings });
   listEvents = (cursor: EventCursor | null, limit: number) =>
     invoke<SpeechEvent[]>("list_events", { before: cursor?.before, beforeId: cursor?.beforeId, limit });

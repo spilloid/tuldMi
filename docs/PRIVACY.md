@@ -17,7 +17,7 @@ exactly what happens to your audio, in plain terms, and what tuldMi does **not**
 
 ## Where it goes
 
-Nowhere, unless you turn on AI assistant access (below). Everything stays on your computer:
+In the default local mode, everything stays on your computer unless you enable AI assistant access (below).
 
 Paths below are for Windows; on macOS the folder is
 `~/Library/Application Support/com.spillerstech.tuldmi/`.
@@ -31,9 +31,9 @@ Paths below are for Windows; on macOS the folder is
 
 Settings → Privacy & data → *Open data folder* takes you there.
 
-- **No telemetry, analytics, crash reporting, accounts, or cloud processing.** Transcription runs
+- **No telemetry, analytics or crash reporting.** Default transcription runs
   locally with whisper.cpp.
-- **The only network requests tuldMi makes** are model downloads, and only when you click
+- **In local mode, network requests made by tuldMi itself** are model downloads, and only when you click
   *Download*: a transcription model, and optionally the two speaker-separation models. They go
   to Hugging Face (huggingface.co), show the size first, and each file is verified with SHA-256.
 - **AI assistants (MCP), off by default.** If you turn on Settings → Privacy & data → *AI
@@ -46,6 +46,28 @@ Settings → Privacy & data → *Open data folder* takes you there.
   tool ran and how many results, never what was asked or said. An assistant that can read files
   on your computer can open the data folder directly whatever this setting says, because the
   history isn't encrypted yet. Details: [mcp.md](mcp.md).
+
+### Optional server processing
+
+Settings → Transcription → **Enable server uploads** opts in to sending **existing queued
+recordings and future speech** to the configured server. Authentik uses device sign-in in your
+browser; tokens stay in memory, never SQLite, settings or logs. Sign in again after restarting.
+The library, capture, playback and durable queue remain on this device. Failed uploads remain
+queued and retain audio. **Use local processing** stops future uploads; an upload already in
+flight can finish. Already-uploaded audio is subject to the server operator's policies. The
+included worker does not archive recordings or transcripts and cleans up temporary uploads
+after each request. This cannot guarantee another server's behavior or infrastructure policies.
+See [server setup](SERVER.md).
+
+### Optional OpenAI processing
+
+Enabling OpenAI uploads uses your saved API key and sends queued and future retained speech directly
+to OpenAI. Saving a key alone does not enable uploads. The key is protected by Windows
+Credential Manager and persists across restarts; it is not stored in the database, exports or
+logs. The frontend only receives whether a key is present. Remove it with **Remove saved key**;
+deleting recording history does not remove credentials. OpenAI's handling/retention policies
+apply to uploaded audio. The included homelab worker's behavior does not describe OpenAI.
+See [cloud costs and setup](CLOUD-COSTS.md).
 
 ## How long it stays
 
@@ -81,7 +103,7 @@ recorded, and many workplaces have policies about recording calls and meetings. 
 responsible for complying with the laws and policies that apply to you.** When in doubt, tell
 people you're using tuldMi, or pause it.
 
-## Not yet (honest limits of v0.1.0)
+## Not yet (honest limits of 0.6.0)
 
 - **No encryption at rest.** The database and audio files are protected only by your OS
   account and disk encryption (e.g. BitLocker, FileVault). Anyone with access to your user account can read

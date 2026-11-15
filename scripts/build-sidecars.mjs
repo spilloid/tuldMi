@@ -24,9 +24,14 @@ const args = ["build", "--release", "--locked", ...sidecars.flatMap((p) => ["-p"
 if (process.argv[2]) args.push("--target", target);
 execFileSync("cargo", args, { cwd: root, stdio: "inherit" });
 
+// Cargo owns target-directory resolution (environment, config, and CLI defaults).
+// The Windows GPU release uses a short external CARGO_TARGET_DIR for native shaders.
+const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--no-deps", "--format-version", "1", "--locked"], {
+  cwd: root, encoding: "utf8",
+}));
 const ext = target.includes("windows") ? ".exe" : "";
 for (const name of sidecars) {
-  const built = join(root, "target", ...(process.argv[2] ? [target] : []), "release", `${name}${ext}`);
+  const built = join(metadata.target_directory, ...(process.argv[2] ? [target] : []), "release", `${name}${ext}`);
   const dest = join(root, "src-tauri", "binaries", `${name}-${target}${ext}`);
   mkdirSync(dirname(dest), { recursive: true });
   copyFileSync(built, dest);

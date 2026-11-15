@@ -16,6 +16,7 @@ their licenses, so they are listed explicitly.
 - whisper.cpp / ggml: MIT, https://github.com/ggml-org/whisper.cpp
 - libopus: BSD-3-Clause, https://opus-codec.org
 - SQLite: Public domain, https://sqlite.org
+- Khronos Vulkan headers (vulkan_core.h and vulkan.hpp): Apache-2.0, selected where dual-licensed; Copyright 2015–2025 The Khronos Group Inc. https://github.com/KhronosGroup/Vulkan-Headers and https://github.com/KhronosGroup/Vulkan-Hpp. License: [Apache-2.0](licenses/Apache-2.0.txt). The SDK/compiler and GPU driver are not bundled.
 
 Compiled into `tuldmi-speakers` (speaker separation), from sherpa-onnx's prebuilt
 no-TTS static libraries (no espeak-ng or other text-to-speech code):
@@ -33,7 +34,7 @@ no-TTS static libraries (no espeak-ng or other text-to-speech code):
 - nlohmann/json: MIT, https://github.com/nlohmann/json (text in ONNX Runtime's ThirdPartyNotices.txt)
 - KISS FFT: BSD-3-Clause, https://github.com/mborgerding/kissfft
 
-## Rust crates (616)
+## Rust crates (619)
 
 | Name | Version | License | Repository |
 | --- | --- | --- | --- |
@@ -273,6 +274,7 @@ no-TTS static libraries (no espeak-ng or other text-to-speech code):
 | jsonptr | 0.7.1 | MIT OR Apache-2.0 | https://github.com/chanced/jsonptr |
 | keyboard-types | 0.7.0 | MIT OR Apache-2.0 | https://github.com/pyfisch/keyboard-types |
 | keyboard-types | 0.8.3 | MIT OR Apache-2.0 | https://github.com/rust-windowing/keyboard-types |
+| keyring | 3.6.3 | MIT OR Apache-2.0 | https://github.com/hwchen/keyring-rs |
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 | https://github.com/rust-lang-nursery/lazy-static.rs |
 | libappindicator | 0.9.0 | Apache-2.0 OR MIT |  |
 | libappindicator-sys | 0.9.0 | Apache-2.0 OR MIT |  |
@@ -295,6 +297,7 @@ no-TTS static libraries (no espeak-ng or other text-to-speech code):
 | memchr | 2.8.3 | Unlicense OR MIT | https://github.com/BurntSushi/memchr |
 | memoffset | 0.9.1 | MIT | https://github.com/Gilnaa/memoffset |
 | mime | 0.3.17 | MIT OR Apache-2.0 | https://github.com/hyperium/mime |
+| mime_guess | 2.0.5 | MIT | https://github.com/abonander/mime_guess |
 | minimal-lexical | 0.2.1 | MIT/Apache-2.0 | https://github.com/Alexhuszagh/minimal-lexical |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 | https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 | https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide |
@@ -530,6 +533,7 @@ no-TTS static libraries (no espeak-ng or other text-to-speech code):
 | typeid | 1.0.3 | MIT OR Apache-2.0 | https://github.com/dtolnay/typeid |
 | typenum | 1.20.1 | MIT OR Apache-2.0 | https://github.com/paholg/typenum |
 | uds_windows | 1.2.1 | MIT | https://github.com/haraldh/rust_uds_windows |
+| unicase | 2.10.0 | MIT OR Apache-2.0 | https://github.com/seanmonstar/unicase |
 | unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/dtolnay/unicode-ident |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-segmentation |
 | untrusted | 0.9.0 | ISC | https://github.com/briansmith/untrusted |
@@ -721,8 +725,8 @@ no-TTS static libraries (no espeak-ng or other text-to-speech code):
 
 | License expression | Total | Rust | npm |
 | --- | --- | --- | --- |
-| MIT OR Apache-2.0 | 277 | 277 | 0 |
-| MIT | 189 | 137 | 52 |
+| MIT OR Apache-2.0 | 279 | 279 | 0 |
+| MIT | 190 | 138 | 52 |
 | Apache-2.0 OR MIT | 55 | 54 | 1 |
 | MIT/Apache-2.0 | 25 | 25 | 0 |
 | Zlib OR Apache-2.0 OR MIT | 23 | 23 | 0 |
