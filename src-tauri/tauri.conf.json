@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "tuldMi",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "identifier": "com.spillerstech.tuldmi",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -30,19 +30,29 @@
       "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost; media-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/audio/**"]
+        "scope": [
+          "$APPDATA/audio/**"
+        ]
       }
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "publisher": "Spillers Technology",
     "copyright": "Copyright (c) 2026 Joseph Spillers. MIT License.",
     "category": "Productivity",
     "shortDescription": "Your conversations, remembered.",
-    "longDescription": "tuldMi is a local-first audio memory: it listens to the microphone and system audio you allow, keeps only speech, transcribes it on your device, and gives you a searchable, playable timeline. Nothing leaves your computer unless you connect an AI assistant.",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "longDescription": "tuldMi captures permitted microphone and system speech, transcribes locally on CPU/GPU or through optional OpenAI or authenticated server processing, and keeps a searchable, playable local timeline. AI assistant access is a separate opt-in.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "resources": {
       "resources/ggml-silero-v6.2.0.bin": "ggml-silero-v6.2.0.bin",
       "resources/ced-tiny-audioset.int8.onnx": "ced-tiny-audioset.int8.onnx",

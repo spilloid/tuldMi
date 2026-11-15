@@ -15,10 +15,22 @@ fn audio_file(dir: &std::path::Path, name: &str) -> NewAudio {
     fs::create_dir_all(&audio_dir).unwrap();
     let path = audio_dir.join(name);
     fs::write(&path, b"OggS fake").unwrap();
-    NewAudio { path, sample_rate: 16_000, duration_ms: 2_000, bytes: 9, peaks: vec![10, 200, 30] }
+    NewAudio {
+        path,
+        sample_rate: 16_000,
+        duration_ms: 2_000,
+        bytes: 9,
+        peaks: vec![10, 200, 30],
+    }
 }
 
-fn event(s: &Store, dir: &std::path::Path, session: &Session, source: Source, at: i64) -> SpeechEvent {
+fn event(
+    s: &Store,
+    dir: &std::path::Path,
+    session: &Session,
+    source: Source,
+    at: i64,
+) -> SpeechEvent {
     s.insert_event(&NewEvent {
         session_id: session.id,
         source,
@@ -32,7 +44,13 @@ fn event(s: &Store, dir: &std::path::Path, session: &Session, source: Source, at
 fn transcribe(s: &Store, id: uuid::Uuid, text: &str) -> SpeechEvent {
     s.save_transcript(
         id,
-        &[NewSegment { start_ms: 0, end_ms: 1_500, text: text.into(), confidence: Some(0.9) , speaker_id: None}],
+        &[NewSegment {
+            start_ms: 0,
+            end_ms: 1_500,
+            text: text.into(),
+            confidence: Some(0.9),
+            speaker_id: None,
+        }],
         Some("en"),
         "whisper-base.en",
     )
@@ -58,6 +76,44 @@ fn migrations_apply_once_and_reopen_is_idempotent() {
 }
 
 #[test]
+fn queue_health_priority_and_server_deferrals_survive_restart() {
+    let (dir, s) = store();
+    let sess = s.start_session(1_000).unwrap();
+    let a = event(&s, dir.path(), &sess, Source::Mic, 10_000);
+    let b = event(&s, dir.path(), &sess, Source::System, 20_000);
+    let (count, health) = s.queue_status().unwrap();
+    assert_eq!(count, 2);
+    assert_eq!(health.audio_ms, 4_000);
+    assert_eq!(health.oldest_event_id, Some(a.id));
+    assert!(
+        s.retry_event(b.id).unwrap(),
+        "queued clips can be prioritized"
+    );
+    assert_eq!(s.next_job().unwrap().unwrap().event_id, b.id);
+    assert!(
+        !s.retry_event(b.id).unwrap(),
+        "running work cannot be requeued from the UI"
+    );
+    for _ in 0..8 {
+        s.defer_job(b.id, "server offline").unwrap();
+        assert_eq!(
+            s.next_job().unwrap().unwrap().attempts,
+            1,
+            "outages do not exhaust retry budget"
+        );
+    }
+    s.defer_job(b.id, "server offline").unwrap();
+    drop(s);
+    let s = Store::open(dir.path()).unwrap();
+    assert_eq!(s.next_job().unwrap().unwrap().event_id, b.id);
+    assert!(s.get_event(b.id).unwrap().unwrap().audio.is_some());
+    assert!(
+        s.expire_audio_before(i64::MAX).unwrap().is_empty(),
+        "retention protects the backlog"
+    );
+}
+
+#[test]
 fn event_lifecycle_and_listing() {
     let (dir, s) = store();
     let sess = s.start_session(1_000).unwrap();
@@ -74,7 +130,11 @@ fn event_lifecycle_and_listing() {
     assert_eq!(s.backlog().unwrap(), 3);
 
     let all = s.list_events(None, 10).unwrap();
-    assert_eq!(all.iter().map(|e| e.id).collect::<Vec<_>>(), vec![c.id, b.id, a.id], "newest first");
+    assert_eq!(
+        all.iter().map(|e| e.id).collect::<Vec<_>>(),
+        vec![c.id, b.id, a.id],
+        "newest first"
+    );
     let page = s.list_events(Some(30_000), 1).unwrap();
     assert_eq!(page.len(), 1);
     assert_eq!(page[0].id, b.id);
@@ -83,9 +143,25 @@ fn event_lifecycle_and_listing() {
     assert_eq!(done.status, EventStatus::Done);
     assert_eq!(done.segments.len(), 1);
     assert_eq!(done.model_id.as_deref(), Some("whisper-base.en"));
-    assert_eq!(s.get_event(a.id).unwrap().unwrap().segments[0].text, "Let's move the budget review to Thursday.");
+    assert_eq!(
+        s.get_event(a.id).unwrap().unwrap().segments[0].text,
+        "Let's move the budget review to Thursday."
+    );
 
-    let empty = s.save_transcript(b.id, &[NewSegment { start_ms: 0, end_ms: 10, text: "   ".into(), confidence: None , speaker_id: None}], None, "m").unwrap();
+    let empty = s
+        .save_transcript(
+            b.id,
+            &[NewSegment {
+                start_ms: 0,
+                end_ms: 10,
+                text: "   ".into(),
+                confidence: None,
+                speaker_id: None,
+            }],
+            None,
+            "m",
+        )
+        .unwrap();
     assert_eq!(empty.status, EventStatus::Empty);
 
     // Re-saving replaces, never duplicates.
@@ -110,14 +186,23 @@ fn job_queue_claims_oldest_and_retries_then_fails() {
     assert_eq!(j.event_id, a.id);
     assert_eq!(j.attempts, 1);
     assert!(j.audio_path.unwrap().exists());
-    assert_eq!(s.get_event(a.id).unwrap().unwrap().status, EventStatus::Transcribing);
+    assert_eq!(
+        s.get_event(a.id).unwrap().unwrap().status,
+        EventStatus::Transcribing
+    );
 
     // Retryable failures requeue until MAX_ATTEMPTS.
     s.fail_job(a.id, "decoder hiccup", true).unwrap();
-    assert_eq!(s.get_event(a.id).unwrap().unwrap().status, EventStatus::Queued);
+    assert_eq!(
+        s.get_event(a.id).unwrap().unwrap().status,
+        EventStatus::Queued
+    );
     for attempt in 2..=MAX_ATTEMPTS {
         let j = s.next_job().unwrap().unwrap();
-        assert_eq!(j.event_id, a.id, "requeued job keeps its place at the front");
+        assert_eq!(
+            j.event_id, a.id,
+            "requeued job keeps its place at the front"
+        );
         assert_eq!(j.attempts, attempt);
         s.fail_job(a.id, "decoder hiccup", true).unwrap();
     }
@@ -128,7 +213,10 @@ fn job_queue_claims_oldest_and_retries_then_fails() {
     let j = s.next_job().unwrap().unwrap();
     assert_eq!(j.event_id, b.id);
     s.fail_job(b.id, "model missing", false).unwrap();
-    assert_eq!(s.get_event(b.id).unwrap().unwrap().status, EventStatus::Failed);
+    assert_eq!(
+        s.get_event(b.id).unwrap().unwrap().status,
+        EventStatus::Failed
+    );
     assert!(s.next_job().unwrap().is_none());
     assert_eq!(s.backlog().unwrap(), 0);
 
@@ -150,7 +238,10 @@ fn crash_recovery_requeues_running_jobs_and_closes_sessions() {
     };
     let s = Store::open(dir.path()).unwrap();
     assert_eq!(s.recover_interrupted_jobs().unwrap(), 1);
-    assert_eq!(s.get_event(ev_id).unwrap().unwrap().status, EventStatus::Queued);
+    assert_eq!(
+        s.get_event(ev_id).unwrap().unwrap().status,
+        EventStatus::Queued
+    );
     assert_eq!(s.backlog().unwrap(), 1);
     assert_eq!(s.close_dangling_sessions().unwrap(), 1);
     assert_eq!(s.close_dangling_sessions().unwrap(), 0);
@@ -165,14 +256,31 @@ fn search_matches_highlights_filters_and_survives_hostile_input() {
     let b = event(&s, dir.path(), &sess, Source::System, 2_000_000);
     let c = event(&s, dir.path(), &sess, Source::Mic, 3_000_000);
     transcribe(&s, a.id, "The budget review moves to Thursday afternoon.");
-    transcribe(&s, b.id, "Can you share the budget spreadsheet before the call?");
+    transcribe(
+        &s,
+        b.id,
+        "Can you share the budget spreadsheet before the call?",
+    );
     transcribe(&s, c.id, "Café plans for the weekend.");
 
-    let q = |text: &str| SearchQuery { text: text.into(), ..Default::default() };
+    let q = |text: &str| SearchQuery {
+        text: text.into(),
+        ..Default::default()
+    };
     let hits = s.search(&q("budget")).unwrap();
     assert_eq!(hits.len(), 2);
-    assert!(hits[0].snippet.contains(&format!("{HIGHLIGHT_START}budget{HIGHLIGHT_END}")) || hits[0].snippet.contains(&format!("{HIGHLIGHT_START}Budget{HIGHLIGHT_END}")));
-    assert_eq!(hits.iter().find(|h| h.event_id == a.id).unwrap().at, 1_000_000);
+    assert!(
+        hits[0]
+            .snippet
+            .contains(&format!("{HIGHLIGHT_START}budget{HIGHLIGHT_END}"))
+            || hits[0]
+                .snippet
+                .contains(&format!("{HIGHLIGHT_START}Budget{HIGHLIGHT_END}"))
+    );
+    assert_eq!(
+        hits.iter().find(|h| h.event_id == a.id).unwrap().at,
+        1_000_000
+    );
 
     // Prefix on the last token, AND across tokens.
     assert_eq!(s.search(&q("budg")).unwrap().len(), 2);
@@ -181,15 +289,42 @@ fn search_matches_highlights_filters_and_survives_hostile_input() {
     assert_eq!(s.search(&q("cafe")).unwrap().len(), 1);
 
     // Filters.
-    let sys_only = s.search(&SearchQuery { text: "budget".into(), sources: vec![Source::System], ..Default::default() }).unwrap();
+    let sys_only = s
+        .search(&SearchQuery {
+            text: "budget".into(),
+            sources: vec![Source::System],
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(sys_only.len(), 1);
     assert_eq!(sys_only[0].source, Source::System);
-    let ranged = s.search(&SearchQuery { text: "budget".into(), from: Some(1_500_000), to: Some(2_500_000), ..Default::default() }).unwrap();
+    let ranged = s
+        .search(&SearchQuery {
+            text: "budget".into(),
+            from: Some(1_500_000),
+            to: Some(2_500_000),
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(ranged.len(), 1);
     assert_eq!(ranged[0].event_id, b.id);
 
     // Hostile input never errors.
-    for nasty in ["\"", "budget\"", "NOT", "a OR b", "-budget", "budget*", "(", "^", "NEAR(a b)", "col:val", "'; DROP TABLE x;--", "    ", ""] {
+    for nasty in [
+        "\"",
+        "budget\"",
+        "NOT",
+        "a OR b",
+        "-budget",
+        "budget*",
+        "(",
+        "^",
+        "NEAR(a b)",
+        "col:val",
+        "'; DROP TABLE x;--",
+        "    ",
+        "",
+    ] {
         let r = s.search(&q(nasty));
         assert!(r.is_ok(), "query {nasty:?} errored: {:?}", r.err());
     }
@@ -218,9 +353,20 @@ fn retention_expires_only_finished_audio_and_keeps_transcripts() {
     assert!(e.audio.is_none());
     assert!(e.audio_expired);
     assert_eq!(e.segments[0].text, "old words");
-    assert!(s.get_event(old_queued.id).unwrap().unwrap().audio.is_some(), "untranscribed audio must survive retention");
+    assert!(
+        s.get_event(old_queued.id).unwrap().unwrap().audio.is_some(),
+        "untranscribed audio must survive retention"
+    );
     assert!(s.get_event(new_done.id).unwrap().unwrap().audio.is_some());
-    assert_eq!(s.search(&SearchQuery { text: "old".into(), ..Default::default() }).unwrap().len(), 1);
+    assert_eq!(
+        s.search(&SearchQuery {
+            text: "old".into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .len(),
+        1
+    );
 
     // Expiring again is a no-op.
     assert!(s.expire_audio_before(50_000).unwrap().is_empty());
@@ -262,7 +408,12 @@ fn settings_roundtrip_and_defaults() {
 #[test]
 fn models_are_recorded() {
     let (dir, s) = store();
-    let m = InstalledModel { model_id: "whisper-base.en".into(), path: dir.path().join("models").join("ggml-base.en.bin"), bytes: 147_951_465, sha256: "abc".into() };
+    let m = InstalledModel {
+        model_id: "whisper-base.en".into(),
+        path: dir.path().join("models").join("ggml-base.en.bin"),
+        bytes: 147_951_465,
+        sha256: "abc".into(),
+    };
     s.record_model(&m).unwrap();
     s.record_model(&m).unwrap(); // upsert
     assert_eq!(s.installed_models().unwrap(), vec![m.clone()]);
@@ -282,8 +433,17 @@ fn recovery_caps_attempts_so_a_crashing_job_cannot_loop_forever() {
         s.recover_interrupted_jobs().unwrap(); // the app "crashed" mid-transcription
     }
     let ev = s.get_event(e.id).unwrap().unwrap();
-    assert_eq!(ev.status, EventStatus::Failed, "a job interrupted MAX_ATTEMPTS times must stop being retried automatically");
-    assert!(ev.error.unwrap_or_default().to_lowercase().contains("interrupted"));
+    assert_eq!(
+        ev.status,
+        EventStatus::Failed,
+        "a job interrupted MAX_ATTEMPTS times must stop being retried automatically"
+    );
+    assert!(
+        ev.error
+            .unwrap_or_default()
+            .to_lowercase()
+            .contains("interrupted")
+    );
     assert!(s.next_job().unwrap().is_none());
     assert!(s.retry_event(e.id).unwrap(), "the user can still retry it");
 }
@@ -295,8 +455,14 @@ fn retention_never_expires_audio_without_a_successful_transcript() {
     let failed = event(&s, dir.path(), &sess, Source::Mic, 1_000);
     s.next_job().unwrap().unwrap();
     s.fail_job(failed.id, "decoder error", false).unwrap();
-    assert_eq!(s.get_event(failed.id).unwrap().unwrap().status, EventStatus::Failed);
-    assert!(s.expire_audio_before(i64::MAX).unwrap().is_empty(), "failed events keep their audio so they can be retried");
+    assert_eq!(
+        s.get_event(failed.id).unwrap().unwrap().status,
+        EventStatus::Failed
+    );
+    assert!(
+        s.expire_audio_before(i64::MAX).unwrap().is_empty(),
+        "failed events keep their audio so they can be retried"
+    );
     assert!(s.retry_event(failed.id).unwrap());
 }
 
@@ -305,9 +471,27 @@ fn search_handles_punctuation_inside_words() {
     let (dir, s) = store();
     let sess = s.start_session(0).unwrap();
     let a = event(&s, dir.path(), &sess, Source::Mic, 1_000);
-    transcribe(&s, a.id, "Let's do a follow-up on the e-mail about version 3.5 in the U.S. office.");
-    for q in ["follow-up", "e-mail", "3.5", "U.S.", "let's", "Let’s", "follow-up e-mail", "version 3.5"] {
-        let hits = s.search(&SearchQuery { text: q.into(), ..Default::default() }).unwrap();
+    transcribe(
+        &s,
+        a.id,
+        "Let's do a follow-up on the e-mail about version 3.5 in the U.S. office.",
+    );
+    for q in [
+        "follow-up",
+        "e-mail",
+        "3.5",
+        "U.S.",
+        "let's",
+        "Let’s",
+        "follow-up e-mail",
+        "version 3.5",
+    ] {
+        let hits = s
+            .search(&SearchQuery {
+                text: q.into(),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(hits.len(), 1, "query {q:?} should match");
     }
 }
@@ -316,8 +500,24 @@ fn search_handles_punctuation_inside_words() {
 fn paging_with_a_cursor_does_not_skip_equal_timestamps() {
     let (dir, s) = store();
     let sess = s.start_session(0).unwrap();
-    let a = s.insert_event(&NewEvent { session_id: sess.id, source: Source::Mic, started_at: 5_000, ended_at: 6_000, audio: Some(audio_file(dir.path(), "a.ogg")) }).unwrap();
-    let b = s.insert_event(&NewEvent { session_id: sess.id, source: Source::System, started_at: 5_000, ended_at: 6_000, audio: Some(audio_file(dir.path(), "b.ogg")) }).unwrap();
+    let a = s
+        .insert_event(&NewEvent {
+            session_id: sess.id,
+            source: Source::Mic,
+            started_at: 5_000,
+            ended_at: 6_000,
+            audio: Some(audio_file(dir.path(), "a.ogg")),
+        })
+        .unwrap();
+    let b = s
+        .insert_event(&NewEvent {
+            session_id: sess.id,
+            source: Source::System,
+            started_at: 5_000,
+            ended_at: 6_000,
+            audio: Some(audio_file(dir.path(), "b.ogg")),
+        })
+        .unwrap();
     let first = s.list_events_page(None, 1).unwrap();
     assert_eq!(first.len(), 1);
     let cursor = (first[0].started_at, first[0].id);
@@ -328,7 +528,11 @@ fn paging_with_a_cursor_does_not_skip_equal_timestamps() {
     let mut want = vec![a.id, b.id];
     want.sort();
     assert_eq!(ids, want);
-    assert!(s.list_events_page(Some((second[0].started_at, second[0].id)), 1).unwrap().is_empty());
+    assert!(
+        s.list_events_page(Some((second[0].started_at, second[0].id)), 1)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -345,7 +549,10 @@ fn deleted_transcripts_do_not_linger_in_database_files() {
     for name in ["tuldmi.db", "tuldmi.db-wal"] {
         let p = dir.path().join(name);
         if let Ok(bytes) = fs::read(&p) {
-            assert!(!bytes.windows(phrase.len()).any(|w| w == phrase.as_bytes()), "deleted text still present in {name}");
+            assert!(
+                !bytes.windows(phrase.len()).any(|w| w == phrase.as_bytes()),
+                "deleted text still present in {name}"
+            );
         }
     }
 }
@@ -358,19 +565,38 @@ fn quiet_audio_expires_after_its_grace_period_and_untranscribed_audio_never_does
     let new_quiet = event(&s, dir.path(), &sess, Source::System, 100_000);
     let queued = event(&s, dir.path(), &sess, Source::Mic, 2_000);
     let done = event(&s, dir.path(), &sess, Source::Mic, 3_000);
-    s.save_untranscribed_quiet(old_quiet.id, None, "whisper-base.en").unwrap();
-    s.save_untranscribed_quiet(new_quiet.id, None, "whisper-base.en").unwrap();
+    s.save_untranscribed_quiet(old_quiet.id, None, "whisper-base.en")
+        .unwrap();
+    s.save_untranscribed_quiet(new_quiet.id, None, "whisper-base.en")
+        .unwrap();
     transcribe(&s, done.id, "words");
-    assert_eq!(s.get_event(old_quiet.id).unwrap().unwrap().error.as_deref(), Some(QUIET_AUDIO_NOTE));
+    assert_eq!(
+        s.get_event(old_quiet.id).unwrap().unwrap().error.as_deref(),
+        Some(QUIET_AUDIO_NOTE)
+    );
 
     // Delete-after-transcription: transcribed audio goes at once, quiet audio after its grace.
-    let mut expired: Vec<_> = s.expire_audio_events_before(i64::MAX, 50_000).unwrap().into_iter().map(|(id, _)| id).collect();
+    let mut expired: Vec<_> = s
+        .expire_audio_events_before(i64::MAX, 50_000)
+        .unwrap()
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
     expired.sort();
     let mut want = vec![old_quiet.id, done.id];
     want.sort();
-    assert_eq!(expired, want, "quiet audio past its grace period must not be kept forever");
-    assert!(s.get_event(new_quiet.id).unwrap().unwrap().audio.is_some(), "quiet audio inside its grace period is kept");
-    assert!(s.get_event(queued.id).unwrap().unwrap().audio.is_some(), "audio still waiting to be transcribed must never expire");
+    assert_eq!(
+        expired, want,
+        "quiet audio past its grace period must not be kept forever"
+    );
+    assert!(
+        s.get_event(new_quiet.id).unwrap().unwrap().audio.is_some(),
+        "quiet audio inside its grace period is kept"
+    );
+    assert!(
+        s.get_event(queued.id).unwrap().unwrap().audio.is_some(),
+        "audio still waiting to be transcribed must never expire"
+    );
 
     // Age-based retention treats quiet audio like any other finished audio.
     let paths = s.expire_audio_before(i64::MAX).unwrap();

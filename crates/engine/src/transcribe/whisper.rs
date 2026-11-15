@@ -1,4 +1,4 @@
-//! CPU whisper.cpp backend; all printing of recognized content is disabled.
+//! whisper.cpp backend with native Metal/Vulkan offload; recognized content is never printed.
 use super::{Transcript, TranscriptionProvider};
 use crate::{Error, Result, speakers::assign::Piece, storage::NewSegment};
 use std::path::Path;
@@ -10,6 +10,7 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 pub struct WhisperProvider {
     context: WhisperContext,
     id: String,
+    backend: Option<&'static str>,
     cancel: Arc<AtomicBool>,
 }
 impl WhisperProvider {
@@ -19,12 +20,40 @@ impl WhisperProvider {
             .to_str()
             .filter(|s| !s.contains('\0'))
             .ok_or_else(|| Error::Model("invalid model path".into()))?;
-        let mut params = WhisperContextParameters::default();
-        params.use_gpu(false);
-        let context = WhisperContext::new_with_params(path, params)
-            .map_err(|e| Error::Model(e.to_string()))?;
+        // The feature compiles Metal on macOS and Vulkan on Windows. A requested
+        // flag alone is not proof of GPU initialization (see the native observer).
+        let use_gpu = cfg!(all(
+            feature = "whisper-gpu",
+            any(target_os = "macos", target_os = "windows")
+        )) && std::env::var_os("TULDMI_FORCE_CPU").is_none();
+        let load = |gpu| {
+            let mut params = WhisperContextParameters::default();
+            params.use_gpu(gpu);
+            let (result, observed_gpu) = crate::vad::native::observe_backend(|| {
+                let context = WhisperContext::new_with_params(path, params)?;
+                // Allocate inference buffers before declaring the backend ready.
+                context.create_state()?;
+                Ok::<_, whisper_rs::WhisperError>(context)
+            });
+            let backend = if !gpu {
+                Some("CPU")
+            } else {
+                // Native diagnostics changed: leave unknown rather than invent a backend.
+                observed_gpu.map(crate::vad::native::Backend::label)
+            };
+            result.map(|context| (context, backend))
+        };
+        let (context, backend) = match load(use_gpu) {
+            Ok(context) => context,
+            Err(_) if use_gpu => {
+                tracing::warn!("GPU model initialization failed; retrying on CPU");
+                load(false).map_err(|e| Error::Model(e.to_string()))?
+            }
+            Err(e) => return Err(Error::Model(e.to_string())),
+        };
         Ok(Self {
             context,
+            backend,
             id: model_id.into(),
             cancel: Arc::new(AtomicBool::new(false)),
         })
@@ -34,6 +63,9 @@ impl WhisperProvider {
     }
 }
 impl TranscriptionProvider for WhisperProvider {
+    fn backend_label(&self) -> Option<&str> {
+        self.backend
+    }
     fn model_id(&self) -> &str {
         &self.id
     }
@@ -137,7 +169,11 @@ impl TranscriptionProvider for WhisperProvider {
                         let data = t.token_data();
                         let start = (data.t0 * 10).clamp(start_ms, end_ms);
                         let end = (data.t1 * 10).clamp(start, end_ms);
-                        Some(Piece { start_ms: start, end_ms: end, bytes: t.to_bytes().ok()?.to_vec() })
+                        Some(Piece {
+                            start_ms: start,
+                            end_ms: end,
+                            bytes: t.to_bytes().ok()?.to_vec(),
+                        })
                     })
                     .collect(),
             );

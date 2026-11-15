@@ -77,9 +77,11 @@ pub struct CaptureStatus {
     pub sources: Vec<SourceStatus>,
     /// Speech events waiting for or undergoing transcription.
     pub backlog: u32,
+    pub queue: QueueStatus,
     /// Id of the active transcription model, if one is installed and loaded.
     pub model_id: Option<String>,
     pub transcriber: TranscriberState,
+    pub transcription_backend: Option<String>,
     /// Remote speaker separation (docs/design/speakers.md).
     pub separation: SeparationStatus,
 }
@@ -115,6 +117,18 @@ pub enum TranscriberState {
     Idle,
     Working,
     Error,
+}
+
+/// Measured queue health. ETAs are absent until enough work has completed.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueStatus {
+    pub audio_ms: i64,
+    pub oldest_event_id: Option<Uuid>,
+    pub oldest_started_at: Option<i64>,
+    pub processing_ms: Option<i64>,
+    pub catch_up_ms: Option<i64>,
+    pub falling_behind: bool,
 }
 
 /// One meter reading. Emitted ~30 times/second per active source.
@@ -354,6 +368,8 @@ pub struct Settings {
     pub model_id: Option<String>,
     /// "auto" or an ISO-639-1 code.
     pub language: String,
+    /// Explicit opt-in: queued recordings are uploaded to this server.
+    pub remote_transcription: Option<RemoteTranscription>,
     pub launch_at_login: bool,
     /// Tauri accelerator string.
     pub pause_shortcut: String,
@@ -404,6 +420,7 @@ impl Default for Settings {
             retention: Retention::Days30,
             model_id: None,
             language: "auto".into(),
+            remote_transcription: None,
             launch_at_login: false,
             // macOS reserves Cmd+Shift+` (cycle windows backwards), so it gets Option+Cmd+`.
             pause_shortcut: if cfg!(target_os = "macos") {
@@ -418,6 +435,26 @@ impl Default for Settings {
             music_rejection: true,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteTranscription {
+    /// Full OpenAI-compatible audio transcription URL, without credentials.
+    pub endpoint: String,
+    pub model: String,
+    pub issuer: String,
+    pub client_id: String,
+    #[serde(default)]
+    pub authentication: RemoteAuthentication,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteAuthentication {
+    #[default]
+    Authentik,
+    ApiKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -480,7 +517,10 @@ pub enum EngineEvent {
     EventDeleted(Uuid),
     ModelProgress(ModelProgress),
     /// A non-fatal problem the user should see (device lost, job failed, disk low...).
-    Notice { level: NoticeLevel, message: String },
+    Notice {
+        level: NoticeLevel,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

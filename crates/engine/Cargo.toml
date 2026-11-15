@@ -11,6 +11,11 @@ default = ["whisper"]
 # whisper.cpp transcription + Silero VAD (ggml). Off => energy VAD only and no transcription
 # backend, which keeps `cargo test` fast for pure-logic work.
 whisper = ["dep:whisper-rs"]
+# Native GPU features are selected by target, not globally unified across platforms.
+# whisper-rs 0.16 uses whisper-rs-sys 0.15; keep this version in sync below.
+whisper-gpu = ["whisper", "dep:whisper-rs-sys"]
+# Compatibility with existing Windows build/test commands.
+whisper-vulkan = ["whisper-gpu"]
 
 [dependencies]
 serde.workspace = true
@@ -26,12 +31,16 @@ ogg = "0.9"
 crossbeam-channel = "0.5"
 parking_lot = "0.12"
 sha2 = "0.10"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "multipart", "json"] }
 whisper-rs = { version = "0.16", optional = true, features = ["raw-api"] }
 fs4 = "0.13"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Enable the existing FFI crate's native Metal backend only on macOS. The wrapper's
+# GPU features otherwise forward their native features on every target. The provider
+# explicitly sets use_gpu, so it does not rely on whisper-rs's default parameter flag.
+whisper-rs-sys = { version = "0.15", optional = true, features = ["metal"] }
 # Core Audio process tap for system audio (capture/macos_tap.rs). Same versions cpal 0.18 uses.
 objc2 = "0.6"
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware", "objc2", "objc2-foundation", "objc2-core-audio-types"] }
@@ -42,3 +51,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 [dev-dependencies]
 tempfile = "3"
 hound = "3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+whisper-rs-sys = { version = "0.15", optional = true, features = ["vulkan"] }
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }

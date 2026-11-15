@@ -80,8 +80,10 @@ export class DemoBackend implements Backend {
         { source: "system", enabled: true, state: opts.fresh ? "disabled" : "active", deviceId: "out:speakers", deviceName: "Speakers (Realtek Audio)", format: "48000 Hz, 2 ch", error: null },
       ],
       backlog: 0,
+      queue: { audioMs: 0, oldestEventId: null, oldestStartedAt: null, processingMs: null, catchUpMs: null, fallingBehind: false },
       modelId: opts.fresh ? null : DEMO_MODEL_ID,
       transcriber: opts.fresh ? "noModel" : "idle",
+      transcriptionBackend: "Demo",
       separation: { state: "off", backfillRemaining: null },
     };
     this.recomputeBacklog();
@@ -106,11 +108,13 @@ export class DemoBackend implements Backend {
   }
 
   private recomputeBacklog() {
+    const queued = this.events.filter((e) => e.status === "queued" || e.status === "transcribing").sort(compareEvents);
     const backlog = this.events.filter((e) => e.status === "queued" || e.status === "transcribing").length;
     const working = this.events.some((e) => e.status === "transcribing");
     this.status = {
       ...this.status,
       backlog,
+      queue: { audioMs: queued.reduce((n, e) => n + e.endedAt - e.startedAt, 0), oldestEventId: queued[0]?.id ?? null, oldestStartedAt: queued[0]?.startedAt ?? null, processingMs: null, catchUpMs: null, fallingBehind: false },
       transcriber: this.status.modelId ? (working ? "working" : "idle") : "noModel",
     };
   }
@@ -256,11 +260,17 @@ export class DemoBackend implements Backend {
 
   async retryEvent(id: string) {
     const ev = this.events.find((e) => e.id === id);
-    if (!ev || ev.status !== "failed") return false;
+    if (!ev || !["failed", "empty", "queued"].includes(ev.status)) return false;
     this.upsert({ ...ev, status: "queued", error: null });
     this.transcribe(id, 600);
     return true;
   }
+
+  async beginRemoteSignIn(): Promise<import("./types").DeviceLogin> { throw new Error("Server sign-in is available in the desktop app."); }
+  async pollRemoteSignIn(): Promise<boolean> { return false; }
+  async hasTranscriptionApiKey(): Promise<boolean> { return false; }
+  async setTranscriptionApiKey(_key: string): Promise<void> { throw new Error("API keys are available in the desktop app."); }
+  async deleteTranscriptionApiKey(): Promise<void> { throw new Error("API keys are available in the desktop app."); }
 
   async deleteEvent(id: string) {
     this.events = this.events.filter((e) => e.id !== id);

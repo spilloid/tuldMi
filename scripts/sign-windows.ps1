@@ -62,7 +62,9 @@ try {
         Endpoint               = $Endpoint.TrimEnd('/')
         CodeSigningAccountName = $AccountName
         CertificateProfileName = $ProfileName
-        CorrelationId          = "tuldmi-$(git rev-parse --short HEAD 2>$null)"
+        # Tauri signs from the build directory, which can be outside the checkout.
+        # Signing must also work for source archives without Git metadata.
+        CorrelationId          = "tuldmi-$([guid]::NewGuid().ToString('N'))"
     } | ConvertTo-Json
     [IO.File]::WriteAllText($metadata, $json, (New-Object System.Text.UTF8Encoding $false))
 
@@ -77,5 +79,6 @@ try {
         }
     }
 } finally {
-    Remove-Item $metadataDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $metadata -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $metadataDir -Force -ErrorAction SilentlyContinue
 }

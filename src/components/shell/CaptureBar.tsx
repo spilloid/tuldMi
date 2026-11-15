@@ -171,7 +171,8 @@ function TranscriberChip({ status, hasModel }: { status: CaptureStatus | null; h
       spin = true;
       break;
     case "working":
-      text = "Transcribing";
+      text = status.queue?.fallingBehind ? "Falling behind" : "Transcribing";
+      if (status.queue?.fallingBehind) tone = "text-warning";
       spin = true;
       break;
     case "idle":

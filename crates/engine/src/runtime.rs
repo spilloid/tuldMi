@@ -19,6 +19,8 @@ pub(super) struct Shared {
     pub settings: Mutex<Settings>,
     pub status: Mutex<CaptureStatus>,
     pub config: EngineConfig,
+    queue_meter: Mutex<crate::transcribe::queue::QueueMeter>,
+    pub remote_auth: Arc<Mutex<crate::transcribe::remote::RemoteAuth>>,
     pub quit: AtomicBool,
     pub cancel_asr: Arc<AtomicBool>,
     /// "Separate past recordings" was requested; the transcription thread picks it up when idle.
@@ -46,7 +48,7 @@ impl Shared {
         settings: Settings,
         wake: Sender<()>,
     ) -> Result<Self> {
-        let backlog = store.backlog()?;
+        let (backlog, queue) = store.queue_status()?;
         let sources = [Source::Mic, Source::System]
             .map(|source| SourceStatus {
                 source,
@@ -70,11 +72,15 @@ impl Shared {
                 session_started_at: None,
                 sources,
                 backlog,
+                queue,
                 model_id: None,
                 transcriber: TranscriberState::NoModel,
+                transcription_backend: None,
                 separation: SeparationStatus::default(),
             }),
             config,
+            queue_meter: Mutex::new(Default::default()),
+            remote_auth: Arc::new(Mutex::new(Default::default())),
             quit: AtomicBool::new(false),
             cancel_asr: Arc::new(AtomicBool::new(false)),
             backfill_requested: AtomicBool::new(false),
@@ -127,7 +133,10 @@ impl Shared {
     /// recording a new failure.
     pub fn retry_discarded_audio(&self) -> usize {
         let batch = std::mem::take(&mut *self.unlink_retry.lock());
-        let failed: Vec<PathBuf> = batch.into_iter().filter(|path| unlink(path).is_err()).collect();
+        let failed: Vec<PathBuf> = batch
+            .into_iter()
+            .filter(|path| unlink(path).is_err())
+            .collect();
         let mut pending = self.unlink_retry.lock();
         for path in failed {
             if !pending.contains(&path) {
@@ -150,8 +159,20 @@ impl Shared {
         Ok(())
     }
     pub fn refresh_backlog(&self) {
-        match self.store.backlog() {
-            Ok(n) => self.status.lock().backlog = n,
+        match self.store.queue_status() {
+            Ok((n, mut queue)) => {
+                let mut status = self.status.lock();
+                self.queue_meter.lock().estimate(
+                    &mut queue,
+                    status.state == CaptureState::Recording,
+                    matches!(
+                        status.transcriber,
+                        TranscriberState::Working | TranscriberState::Idle
+                    ),
+                );
+                status.backlog = n;
+                status.queue = queue;
+            }
             Err(_) => self.notice("could not read transcription backlog"),
         }
         self.publish();
@@ -246,7 +267,7 @@ fn selected(settings: &Settings, source: Source) -> Option<&str> {
 pub(super) enum Command {
     Pause(bool, Sender<Result<()>>),
     Monitor(bool, Sender<Result<()>>),
-    Settings(Settings, Sender<Result<()>>),
+    Settings(Box<Settings>, Sender<Result<()>>),
     Recover,
     Shutdown(Sender<Result<()>>),
 }
@@ -327,8 +348,9 @@ impl Pipeline {
         };
         let rate = u64::from(self.convert.in_rate());
         let channels = usize::from(self.convert.channels());
-        let mut frames = u64::try_from(missing.as_micros().saturating_mul(u128::from(rate)) / 1_000_000)
-            .unwrap_or(u64::MAX);
+        let mut frames =
+            u64::try_from(missing.as_micros().saturating_mul(u128::from(rate)) / 1_000_000)
+                .unwrap_or(u64::MAX);
         let mut finished = Vec::new();
         // At most one second per chunk keeps memory bounded however long the gap was.
         while frames > 0 {
@@ -562,8 +584,8 @@ impl Processor {
                 .iter_mut()
                 .find(|s| s.source == source)
                 .is_some_and(|s| {
-                    let changed = s.state != SourceState::Unavailable
-                        || s.error.as_deref() != Some(error);
+                    let changed =
+                        s.state != SourceState::Unavailable || s.error.as_deref() != Some(error);
                     s.state = SourceState::Unavailable;
                     s.error = Some(error.into());
                     changed
@@ -587,9 +609,8 @@ impl Processor {
             return;
         }
         let v = &self.settings.vad;
-        let limit = Duration::from_millis(
-            u64::from(v.min_silence_ms.max(v.post_roll_ms)) + QUIET_SLACK_MS,
-        );
+        let limit =
+            Duration::from_millis(u64::from(v.min_silence_ms.max(v.post_roll_ms)) + QUIET_SLACK_MS);
         let now = Instant::now();
         for source in [Source::Mic, Source::System] {
             let Some(mut pipeline) = self.pipelines.remove(&source) else {
@@ -684,7 +705,8 @@ impl Processor {
                         pipeline.total = pipeline.total.max(pipeline.segmenter.position());
                         let frames = data.len() as u64 / u64::from(pipeline.convert.channels());
                         let duration = Duration::from_micros(
-                            frames.saturating_mul(1_000_000) / u64::from(pipeline.convert.in_rate()),
+                            frames.saturating_mul(1_000_000)
+                                / u64::from(pipeline.convert.in_rate()),
                         );
                         if let Some(clock) = &mut pipeline.clock {
                             clock.rebase(pipeline.total, at.checked_sub(duration).unwrap_or(at));
@@ -828,6 +850,7 @@ pub(super) fn processing(
                     let _ = reply.try_send(Ok(())); shared.publish();
                 }
                 Ok(Command::Settings(settings, reply)) => {
+                    let settings = *settings;
                     let old = std::mem::replace(&mut p.settings, settings.clone());
                     *shared.settings.lock() = settings.clone();
                     for source in [Source::Mic, Source::System] {
@@ -972,57 +995,86 @@ fn persist_segment(
             shared.notice("could not finalize audio filename; original retained");
         }
     }
+    shared
+        .queue_meter
+        .lock()
+        .arrival(ended_at.saturating_sub(started_at));
     shared.emit(EngineEvent::EventUpserted(event.clone()));
     Ok(event)
 }
 fn set_transcriber(shared: &Shared, state: TranscriberState, model: Option<&str>) {
-    {
+    let changed = {
         let mut status = shared.status.lock();
+        let changed = status.transcriber != state || status.model_id.as_deref() != model;
         status.transcriber = state;
         status.model_id = model.map(str::to_owned);
+        if matches!(state, TranscriberState::NoModel | TranscriberState::Loading) {
+            status.transcription_backend = None;
+        }
+        changed
+    };
+    // Captures/deletions refresh queue metrics themselves. Do not scan an hours-long
+    // backlog five times per second just because no model is available.
+    if changed {
+        shared.refresh_backlog();
     }
-    shared.refresh_backlog();
 }
 pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
-    #[cfg(feature = "whisper")]
     {
-        use crate::transcribe::{TranscriptionProvider, whisper::WhisperProvider};
-        let mut provider: Option<WhisperProvider> = None;
+        use crate::transcribe::{TranscriptionProvider, remote::RemoteProvider};
+        let mut provider: Option<Box<dyn TranscriptionProvider>> = None;
         type ModelKey = (String, PathBuf, Option<std::time::SystemTime>);
         let mut loaded: Option<ModelKey> = None;
         let mut failed: Option<ModelKey> = None;
+        let mut retry_delay = 1u64;
         let mut separation = super::separation::Separation::new();
         while !shared.quit.load(Ordering::Acquire) && !shared.cancel_asr.load(Ordering::Acquire) {
             separation.housekeep(&shared, false);
             let settings = shared.settings.lock().clone();
-            let installed = shared.store.installed_models().unwrap_or_else(|_| {
-                shared.notice("could not read installed models");
-                Vec::new()
-            });
-            let model = installed
-                .into_iter()
-                .find(|m| Some(&m.model_id) == settings.model_id.as_ref() && m.path.is_file());
-            let Some(model) = model else {
-                provider = None;
-                loaded = None;
-                failed = None;
-                set_transcriber(&shared, TranscriberState::NoModel, None);
-                separation.housekeep(&shared, true);
-                // Separating past recordings needs no transcription model.
-                if separation.backfilling(&shared) {
-                    separation.backfill_step(&shared);
+            let (model_id, path, key) = if let Some(remote) = &settings.remote_transcription {
+                let prefix = if remote.authentication == RemoteAuthentication::ApiKey {
+                    "openai"
+                } else {
+                    "server"
+                };
+                let id = format!("{prefix}:{}", remote.model);
+                let identity = serde_json::to_string(remote).unwrap_or_default();
+                (
+                    id.clone(),
+                    PathBuf::new(),
+                    (id, PathBuf::from(identity), None),
+                )
+            } else {
+                let installed = shared.store.installed_models().unwrap_or_else(|_| {
+                    shared.notice("could not read installed models");
+                    Vec::new()
+                });
+                let model = installed
+                    .into_iter()
+                    .find(|m| Some(&m.model_id) == settings.model_id.as_ref() && m.path.is_file());
+                let Some(model) = model else {
+                    provider = None;
+                    loaded = None;
+                    failed = None;
+                    shared.queue_meter.lock().reset_service();
+                    set_transcriber(&shared, TranscriberState::NoModel, None);
+                    separation.housekeep(&shared, true);
+                    if separation.backfilling(&shared) {
+                        separation.backfill_step(&shared);
+                        continue;
+                    }
+                    let _ = waking.recv_timeout(Duration::from_millis(200));
                     continue;
-                }
-                let _ = waking.recv_timeout(Duration::from_millis(200));
-                continue;
-            };
-            let key = (
-                model.model_id.clone(),
-                model.path.clone(),
-                std::fs::metadata(&model.path)
+                };
+                let modified = std::fs::metadata(&model.path)
                     .and_then(|m| m.modified())
-                    .ok(),
-            );
+                    .ok();
+                (
+                    model.model_id.clone(),
+                    model.path.clone(),
+                    (model.model_id, model.path, modified),
+                )
+            };
             if loaded.as_ref() != Some(&key) {
                 if failed.as_ref() == Some(&key) {
                     separation.housekeep(&shared, true);
@@ -1032,9 +1084,33 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 provider = None;
                 loaded = None;
                 set_transcriber(&shared, TranscriberState::Loading, None);
-                match WhisperProvider::load(&model.path, &model.model_id) {
-                    Ok(mut p) => {
-                        p.set_cancel(shared.cancel_asr.clone());
+                shared.queue_meter.lock().reset_service();
+                let created: Result<Box<dyn TranscriptionProvider>> =
+                    if let Some(remote) = &settings.remote_transcription {
+                        RemoteProvider::new(remote.clone(), shared.remote_auth.clone())
+                            .map(|p| Box::new(p) as Box<dyn TranscriptionProvider>)
+                    } else {
+                        #[cfg(feature = "whisper")]
+                        {
+                            crate::transcribe::whisper::WhisperProvider::load(&path, &model_id).map(
+                                |mut p| {
+                                    p.set_cancel(shared.cancel_asr.clone());
+                                    Box::new(p) as Box<dyn TranscriptionProvider>
+                                },
+                            )
+                        }
+                        #[cfg(not(feature = "whisper"))]
+                        {
+                            let _ = &path;
+                            Err(Error::Model(
+                                "local transcription is not available in this build".into(),
+                            ))
+                        }
+                    };
+                match created {
+                    Ok(p) => {
+                        shared.status.lock().transcription_backend =
+                            p.backend_label().map(str::to_owned);
                         provider = Some(p);
                         loaded = Some(key.clone());
                         failed = None;
@@ -1050,8 +1126,13 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
             if shared.cancel_asr.load(Ordering::Acquire) {
                 break;
             }
-            if shared.settings.lock().model_id.as_ref() != Some(&model.model_id) {
-                continue;
+            {
+                let current = shared.settings.lock();
+                if current.model_id != settings.model_id
+                    || current.remote_transcription != settings.remote_transcription
+                {
+                    continue;
+                }
             }
             let next = {
                 let _gate = shared.persist_gate.lock();
@@ -1060,7 +1141,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
             let job = match next {
                 Ok(Some(job)) => job,
                 Ok(None) => {
-                    set_transcriber(&shared, TranscriberState::Idle, Some(&model.model_id));
+                    set_transcriber(&shared, TranscriberState::Idle, Some(&model_id));
                     separation.housekeep(&shared, true);
                     // Past recordings are separated only while nothing waits for transcription.
                     if separation.backfilling(&shared) {
@@ -1079,7 +1160,9 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
             if shared.upsert(job.event_id).is_err() {
                 shared.notice("could not announce transcription job");
             }
-            set_transcriber(&shared, TranscriberState::Working, Some(&model.model_id));
+            set_transcriber(&shared, TranscriberState::Working, Some(&model_id));
+            let job_started = Instant::now();
+            let mut remote_request = false;
             let placement = separation.observe(&job);
             let music_generation = shared.music_generation.load(Ordering::Acquire);
             let result = (|| {
@@ -1100,10 +1183,13 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 if settings.music_rejection
                     && !gated
                     && !job.transcribe_anyway
-                    && separation.classify(&shared, &samples).is_some_and(|s| crate::speakers::music::is_music(&s))
+                    && separation
+                        .classify(&shared, &samples)
+                        .is_some_and(|s| crate::speakers::music::is_music(&s))
                 {
                     return Ok((None, gated, samples));
                 }
+                remote_request = settings.remote_transcription.is_some();
                 provider
                     .transcribe(&samples, Some(&settings.language))
                     .map(|transcript| (Some(transcript), gated, samples))
@@ -1111,7 +1197,9 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
             // Speakers are separated outside the persist gate (the worker can take seconds) and
             // saved inside it with the transcript.
             let separated = match &result {
-                Ok((Some(transcript), gated, samples)) if !(*gated && transcript.segments.is_empty()) => {
+                Ok((Some(transcript), gated, samples))
+                    if !(*gated && transcript.segments.is_empty()) =>
+                {
                     separation.separate_live(&shared, &job, placement, samples, transcript)
                 }
                 _ => None,
@@ -1136,29 +1224,42 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                         shared.notice("could not queue a recording again after a settings change");
                     }
                     let _ = shared.upsert(job.event_id);
-                    set_transcriber(&shared, TranscriberState::Idle, Some(&model.model_id));
+                    set_transcriber(&shared, TranscriberState::Idle, Some(&model_id));
                     continue;
                 }
                 other => other,
             };
             match result {
-                Ok((heard, gated, _)) => {
+                Ok((heard, gated, samples)) => {
+                    retry_delay = 1;
+                    if !gated && heard.is_some() {
+                        shared
+                            .queue_meter
+                            .lock()
+                            .completed(samples.len() as i64 / 16, job_started.elapsed());
+                    }
                     let music = heard.is_none();
                     let transcript = heard.unwrap_or_default();
                     // Neither music nor quiet audio was transcribed: delete-after-transcription
                     // keeps them for QUIET_AUDIO_GRACE_MS (to play, retry, or transcribe anyway).
                     let untranscribed = music || (gated && transcript.segments.is_empty());
                     let saved = if music {
-                        shared.store.save_music(job.event_id, &model.model_id)
+                        shared.store.save_music(job.event_id, &model_id)
                     } else if untranscribed {
                         shared.store.save_untranscribed_quiet(
                             job.event_id,
                             transcript.language.as_deref(),
-                            &model.model_id,
+                            &model_id,
                         )
                     } else if let Some(separated) = separated {
                         separation
-                            .commit_live(&shared, &job, separated, transcript.language.as_deref(), &model.model_id)
+                            .commit_live(
+                                &shared,
+                                &job,
+                                separated,
+                                transcript.language.as_deref(),
+                                &model_id,
+                            )
                             .map(|(event, others)| {
                                 relabelled = others;
                                 event
@@ -1168,7 +1269,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                             job.event_id,
                             &transcript.segments,
                             transcript.language.as_deref(),
-                            &model.model_id,
+                            &model_id,
                         )
                     };
                     match saved {
@@ -1219,7 +1320,36 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                         }
                     }
                 }
-                Err(_) => {
+                Err(error) => {
+                    if remote_request {
+                        let message = error.to_string();
+                        if shared.store.defer_job(job.event_id, &message).is_err() {
+                            shared.notice("could not requeue server transcription");
+                        }
+                        let _ = shared.upsert(job.event_id);
+                        drop(_gate);
+                        set_transcriber(&shared, TranscriberState::Error, Some(&model_id));
+                        if retry_delay == 1 {
+                            shared.notice(&message);
+                        }
+                        // Wake promptly for a settings/sign-in change, but captures must not
+                        // defeat exponential backoff by continually sending wake signals.
+                        let until = Instant::now() + Duration::from_secs(retry_delay);
+                        let auth_revision = shared.remote_auth.lock().revision();
+                        while Instant::now() < until && !shared.cancel_asr.load(Ordering::Acquire) {
+                            let _ = waking.recv_timeout(Duration::from_millis(200));
+                            if shared.settings.lock().remote_transcription
+                                != settings.remote_transcription
+                            {
+                                break;
+                            }
+                            if shared.remote_auth.lock().revision() != auth_revision {
+                                break;
+                            }
+                        }
+                        retry_delay = (retry_delay * 2).min(60);
+                        continue;
+                    }
                     if shared
                         .store
                         .get_event(job.event_id)
@@ -1244,23 +1374,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 }
             }
             super::separation::announce(&shared, relabelled);
-            set_transcriber(&shared, TranscriberState::Idle, Some(&model.model_id));
-        }
-        separation.shutdown();
-    }
-    // Without a transcription backend there is nothing to transcribe, but past recordings can
-    // still have their speakers separated.
-    #[cfg(not(feature = "whisper"))]
-    {
-        let mut separation = super::separation::Separation::new();
-        while !shared.quit.load(Ordering::Acquire) && !shared.cancel_asr.load(Ordering::Acquire) {
-            set_transcriber(&shared, TranscriberState::NoModel, None);
-            separation.housekeep(&shared, true);
-            if separation.backfilling(&shared) {
-                separation.backfill_step(&shared);
-                continue;
-            }
-            let _ = waking.recv_timeout(Duration::from_millis(200));
+            set_transcriber(&shared, TranscriberState::Idle, Some(&model_id));
         }
         separation.shutdown();
     }
@@ -1274,9 +1388,7 @@ fn retain(shared: &Shared) -> Vec<Uuid> {
     let (cutoff, quiet_cutoff) = match policy {
         // Quiet audio the energy gate never transcribed is not "transcribed" audio: keep it
         // for a grace period to listen or retry, then let it go like the rest.
-        Retention::DeleteAfterTranscription => {
-            (i64::MAX, now.saturating_sub(QUIET_AUDIO_GRACE_MS))
-        }
+        Retention::DeleteAfterTranscription => (i64::MAX, now.saturating_sub(QUIET_AUDIO_GRACE_MS)),
         policy => match policy.max_age_ms() {
             // Store protects queued, running and failed audio from expiration.
             Some(age) => {
@@ -1287,7 +1399,10 @@ fn retain(shared: &Shared) -> Vec<Uuid> {
         },
     };
     let _gate = shared.persist_gate.lock();
-    match shared.store.expire_audio_events_before(cutoff, quiet_cutoff) {
+    match shared
+        .store
+        .expire_audio_events_before(cutoff, quiet_cutoff)
+    {
         Ok(expired) => {
             // Unlink every file (no short-circuit); report failures once.
             let failures = expired
@@ -1310,7 +1425,9 @@ fn retain(shared: &Shared) -> Vec<Uuid> {
 /// keeps a speaker the transcription thread just created, and is about to reference, safe).
 const ORPHAN_SPEAKER_AGE_MS: i64 = 86_400_000;
 fn sweep_speakers(shared: &Shared) {
-    let cutoff = chrono::Local::now().timestamp_millis().saturating_sub(ORPHAN_SPEAKER_AGE_MS);
+    let cutoff = chrono::Local::now()
+        .timestamp_millis()
+        .saturating_sub(ORPHAN_SPEAKER_AGE_MS);
     let _gate = shared.persist_gate.lock();
     if shared.store.forget_orphan_speaker_names(cutoff).is_err() {
         shared.notice("could not remove unused speaker names");

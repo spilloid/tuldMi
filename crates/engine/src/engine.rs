@@ -152,8 +152,14 @@ impl Engine {
         // Engine threads emit only into the dispatcher; it alone calls the shell's sink.
         let (events, events_thread) = Dispatcher::start(sink)?;
         let sink: Arc<dyn EventSink> = Arc::new(events.clone());
-        let shared = match Shared::new(config, store.clone(), sink.clone(), provider, settings, wake)
-        {
+        let shared = match Shared::new(
+            config,
+            store.clone(),
+            sink.clone(),
+            provider,
+            settings,
+            wake,
+        ) {
             Ok(shared) => Arc::new(shared),
             Err(error) => {
                 events.finish(events_thread, DISPATCH_GRACE);
@@ -235,6 +241,9 @@ impl Engine {
     }
     pub fn update_settings(&self, settings: Settings) -> Result<Settings> {
         let _guard = self.transitions.lock();
+        if let Some(config) = &settings.remote_transcription {
+            crate::transcribe::remote::validate(config)?;
+        }
         if !settings.vad.threshold.is_finite()
             || !(0.0..=1.0).contains(&settings.vad.threshold)
             || settings.vad.max_segment_ms == 0
@@ -248,10 +257,16 @@ impl Engine {
         }
         let (previous_retention, previous_speakers, previous_music) = {
             let current = self.shared.settings.lock();
-            (current.retention, current.speakers_enabled, current.music_rejection)
+            (
+                current.retention,
+                current.speakers_enabled,
+                current.music_rejection,
+            )
         };
         self.shared.store.save_settings(&settings)?;
-        if previous_speakers != settings.speakers_enabled || previous_music != settings.music_rejection {
+        if previous_speakers != settings.speakers_enabled
+            || previous_music != settings.music_rejection
+        {
             // Voices, speaker results and music decisions from before a switch must not survive
             // it, even if it is switched back before the transcription thread looks. Bumped under
             // the persist gate, which every such result is checked and saved under, so a save
@@ -266,13 +281,15 @@ impl Engine {
                 current.music_rejection = settings.music_rejection;
             }
             if previous_speakers != settings.speakers_enabled {
-                self.shared.speakers_generation.fetch_add(1, Ordering::AcqRel);
+                self.shared
+                    .speakers_generation
+                    .fetch_add(1, Ordering::AcqRel);
             }
             if previous_music != settings.music_rejection {
                 self.shared.music_generation.fetch_add(1, Ordering::AcqRel);
             }
         }
-        self.request(|reply| Command::Settings(settings.clone(), reply))?;
+        self.request(|reply| Command::Settings(Box::new(settings.clone()), reply))?;
         let _ = self.shared.wake.try_send(());
         if previous_retention != settings.retention {
             // The sweep runs on the housekeeping thread (bounded SQL, never the capture path).
@@ -291,6 +308,41 @@ impl Engine {
     }
     pub fn store(&self) -> Arc<Store> {
         self.shared.store.clone()
+    }
+
+    pub fn begin_remote_sign_in(&self) -> Result<crate::transcribe::remote::DeviceLogin> {
+        let config = self
+            .settings()
+            .remote_transcription
+            .ok_or_else(|| Error::Other("enable server transcription first".into()))?;
+        self.shared.remote_auth.lock().begin(&config)
+    }
+
+    pub fn has_transcription_api_key(&self) -> Result<bool> {
+        Ok(crate::transcribe::credentials::read()?.is_some())
+    }
+    pub fn set_transcription_api_key(&self, key: &str) -> Result<()> {
+        crate::transcribe::credentials::set(key)?;
+        self.shared.remote_auth.lock().credentials_changed();
+        let _ = self.shared.wake.try_send(());
+        Ok(())
+    }
+    pub fn delete_transcription_api_key(&self) -> Result<()> {
+        crate::transcribe::credentials::delete()?;
+        self.shared.remote_auth.lock().credentials_changed();
+        let _ = self.shared.wake.try_send(());
+        Ok(())
+    }
+    pub fn poll_remote_sign_in(&self) -> Result<bool> {
+        let config = self
+            .settings()
+            .remote_transcription
+            .ok_or_else(|| Error::Other("server transcription is disabled".into()))?;
+        let ready = self.shared.remote_auth.lock().poll(&config)?;
+        if ready {
+            let _ = self.shared.wake.try_send(());
+        }
+        Ok(ready)
     }
     pub fn list_events(&self, before: Option<i64>, limit: u32) -> Result<Vec<SpeechEvent>> {
         self.shared.store.list_events(before, limit)
@@ -404,7 +456,9 @@ impl Engine {
         }
         let candidates = self.shared.store.backfill_candidates()?;
         if candidates > 0 {
-            self.shared.backfill_requested.store(true, Ordering::Release);
+            self.shared
+                .backfill_requested
+                .store(true, Ordering::Release);
             let _ = self.shared.wake.try_send(());
         }
         Ok(candidates)

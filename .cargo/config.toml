@@ -7,6 +7,9 @@ LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'
 SHERPA_ONNX_LIB_DIR = { value = ".sherpa-onnx/lib", relative = true }
 # Keeps CMake-built C libraries (libopus, whisper.cpp) on the same C runtime; no-op off Windows.
 CMAKE_TOOLCHAIN_FILE = { value = "cmake/msvc-static-runtime.cmake", relative = true }
+# whisper.cpp declares CMake 3.14: opt into CMP0091 before project() so Ninja does
+# not append legacy /MD defaults after cmake-rs's /MT flags.
+CMAKE_POLICY_DEFAULT_CMP0091 = "NEW"
 
 # sherpa-onnx's Windows libraries are built with the static C runtime (/MT); building the whole
 # workspace the same way keeps one C runtime in every binary (whisper.cpp follows crt-static).

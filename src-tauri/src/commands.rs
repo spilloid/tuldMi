@@ -47,7 +47,62 @@ pub async fn get_settings(state: State<'_, AppState>) -> Res<Settings> {
 }
 
 #[tauri::command]
-pub async fn update_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> Res<Settings> {
+pub async fn begin_remote_sign_in(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Res<tuldmi_engine::transcribe::remote::DeviceLogin> {
+    let engine = state.engine.clone();
+    let login = tauri::async_runtime::spawn_blocking(move || engine.begin_remote_sign_in())
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+    // The engine checks that this URL belongs to the configured HTTPS issuer.
+    app.opener()
+        .open_url(&login.verification_uri, None::<&str>)
+        .map_err(err)?;
+    Ok(login)
+}
+
+#[tauri::command]
+pub async fn poll_remote_sign_in(state: State<'_, AppState>) -> Res<bool> {
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.poll_remote_sign_in())
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn has_transcription_api_key(state: State<'_, AppState>) -> Res<bool> {
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.has_transcription_api_key())
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+#[tauri::command]
+pub async fn set_transcription_api_key(state: State<'_, AppState>, key: String) -> Res<()> {
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.set_transcription_api_key(&key))
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+#[tauri::command]
+pub async fn delete_transcription_api_key(state: State<'_, AppState>) -> Res<()> {
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.delete_transcription_api_key())
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn update_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: Settings,
+) -> Res<Settings> {
     let old = state.engine.settings();
     let saved = state.engine.update_settings(settings).map_err(err)?;
     if old.launch_at_login != saved.launch_at_login
@@ -60,7 +115,8 @@ pub async fn update_settings(app: AppHandle, state: State<'_, AppState>, setting
         return Err(e);
     }
     if old.pause_shortcut != saved.pause_shortcut
-        && let Err(e) = crate::register_shortcut(&app, Some(&old.pause_shortcut), &saved.pause_shortcut)
+        && let Err(e) =
+            crate::register_shortcut(&app, Some(&old.pause_shortcut), &saved.pause_shortcut)
     {
         // Restore the previous working shortcut so the user isn't left without one.
         let _ = crate::register_shortcut(&app, None, &old.pause_shortcut);
@@ -73,7 +129,12 @@ pub async fn update_settings(app: AppHandle, state: State<'_, AppState>, setting
 }
 
 #[tauri::command]
-pub async fn list_events(state: State<'_, AppState>, before: Option<i64>, before_id: Option<String>, limit: u32) -> Res<Vec<SpeechEvent>> {
+pub async fn list_events(
+    state: State<'_, AppState>,
+    before: Option<i64>,
+    before_id: Option<String>,
+    limit: u32,
+) -> Res<Vec<SpeechEvent>> {
     let cursor = match (before, before_id) {
         (Some(at), Some(id)) => Some((at, self::id(&id)?)),
         // A timestamp alone means "older than this instant"; the nil UUID sorts first, so
@@ -81,7 +142,11 @@ pub async fn list_events(state: State<'_, AppState>, before: Option<i64>, before
         (Some(at), None) => Some((at, Uuid::nil())),
         _ => None,
     };
-    state.engine.store().list_events_page(cursor, limit.clamp(1, 500)).map_err(err)
+    state
+        .engine
+        .store()
+        .list_events_page(cursor, limit.clamp(1, 500))
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -142,13 +207,17 @@ pub async fn storage_stats(state: State<'_, AppState>) -> Res<StorageStats> {
 
 #[tauri::command]
 pub async fn open_data_dir(app: AppHandle, state: State<'_, AppState>) -> Res<()> {
-    app.opener().open_path(state.data_dir.to_string_lossy(), None::<&str>).map_err(err)
+    app.opener()
+        .open_path(state.data_dir.to_string_lossy(), None::<&str>)
+        .map_err(err)
 }
 
 /// An executable installed next to the app (Tauri `externalBin`), if present.
 pub fn sidecar(name: &str) -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    exe.parent().map(|dir| dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX))).filter(|p| p.is_file())
+    exe.parent()
+        .map(|dir| dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)))
+        .filter(|p| p.is_file())
 }
 
 /// The `tuldmi-mcp` executable installed next to the app, if any.
@@ -182,14 +251,23 @@ pub async fn separate_past_recordings(state: State<'_, AppState>) -> Res<u32> {
 }
 
 #[tauri::command]
-pub async fn export_transcripts(app: AppHandle, state: State<'_, AppState>, format: String, from: Option<i64>, to: Option<i64>) -> Res<String> {
+pub async fn export_transcripts(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    format: String,
+    from: Option<i64>,
+    to: Option<i64>,
+) -> Res<String> {
     let format = match format.as_str() {
         "markdown" => ExportFormat::Markdown,
         "json" => ExportFormat::Json,
         _ => return Err("Unknown export format.".into()),
     };
     let docs = app.path().document_dir().map_err(err)?;
-    let path = state.engine.export(format, from, to, &docs.join("tuldMi Exports")).map_err(err)?;
+    let path = state
+        .engine
+        .export(format, from, to, &docs.join("tuldMi Exports"))
+        .map_err(err)?;
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -197,9 +275,18 @@ pub async fn export_transcripts(app: AppHandle, state: State<'_, AppState>, form
 #[tauri::command]
 pub async fn reveal_path(app: AppHandle, state: State<'_, AppState>, path: String) -> Res<()> {
     let p = PathBuf::from(&path);
-    let exports = app.path().document_dir().map_err(err)?.join("tuldMi Exports");
-    let canon = p.canonicalize().map_err(|_| "That file no longer exists.".to_string())?;
-    let allowed = [state.data_dir.clone(), exports].iter().filter_map(|d| d.canonicalize().ok()).any(|d| canon.starts_with(d));
+    let exports = app
+        .path()
+        .document_dir()
+        .map_err(err)?
+        .join("tuldMi Exports");
+    let canon = p
+        .canonicalize()
+        .map_err(|_| "That file no longer exists.".to_string())?;
+    let allowed = [state.data_dir.clone(), exports]
+        .iter()
+        .filter_map(|d| d.canonicalize().ok())
+        .any(|d| canon.starts_with(d));
     if !allowed {
         return Err("Not allowed.".into());
     }

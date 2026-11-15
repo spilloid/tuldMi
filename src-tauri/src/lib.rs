@@ -34,7 +34,11 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if args.iter().any(|a| a == PAUSE_ARG) {
-                let ack = args.iter().position(|a| a == PAUSE_ACK_ARG).and_then(|i| args.get(i + 1)).and_then(|t| uuid::Uuid::parse_str(t).ok());
+                let ack = args
+                    .iter()
+                    .position(|a| a == PAUSE_ACK_ARG)
+                    .and_then(|i| args.get(i + 1))
+                    .and_then(|t| uuid::Uuid::parse_str(t).ok());
                 pause_by_request(app, ack);
             } else {
                 window::show_main(app);
@@ -42,7 +46,10 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec!["--minimized"]),
+        ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -61,7 +68,11 @@ pub fn run() {
                 }
                 tracing::error!(error = %e, "startup failed");
                 let msg = format!("tuldMi could not start.\n\n{e}");
-                app.dialog().message(msg).title("tuldMi").kind(MessageDialogKind::Error).show(|_| std::process::exit(1));
+                app.dialog()
+                    .message(msg)
+                    .title("tuldMi")
+                    .kind(MessageDialogKind::Error)
+                    .show(|_| std::process::exit(1));
             }
             Ok(())
         })
@@ -72,6 +83,11 @@ pub fn run() {
             commands::set_monitoring,
             commands::list_devices,
             commands::get_settings,
+            commands::begin_remote_sign_in,
+            commands::poll_remote_sign_in,
+            commands::has_transcription_api_key,
+            commands::set_transcription_api_key,
+            commands::delete_transcription_api_key,
             commands::update_settings,
             commands::list_events,
             commands::get_event,
@@ -104,7 +120,9 @@ pub fn run() {
     app.run(|app, event| match event {
         // Windows are hidden, never closed, so a code-less request only happens if the last
         // window goes away unexpectedly; keep running — capture lives in the tray.
-        RunEvent::ExitRequested { code: None, api, .. } => api.prevent_exit(),
+        RunEvent::ExitRequested {
+            code: None, api, ..
+        } => api.prevent_exit(),
         // Explicit quit (tray, `quit_app`): shut the engine down *now*, while the event loop is
         // still alive, so in-progress speech is flushed and persisted before teardown.
         RunEvent::ExitRequested { code: Some(_), .. } => shutdown(app),
@@ -136,7 +154,9 @@ pub const PAUSE_ACK_ARG: &str = "--pause-ack";
 
 fn write_pause_ack(app: &AppHandle, token: Option<uuid::Uuid>, outcome: &str) {
     let Some(token) = token else { return };
-    let Ok(dir) = app.path().app_data_dir().map(|d| d.join("mcp")) else { return };
+    let Ok(dir) = app.path().app_data_dir().map(|d| d.join("mcp")) else {
+        return;
+    };
     // Written whole, then renamed, so the reader never sees a partial outcome.
     let partial = dir.join(format!("{token}.partial"));
     let result = std::fs::create_dir_all(&dir)
@@ -156,25 +176,30 @@ fn pause_by_request(app: &AppHandle, ack: Option<uuid::Uuid>) {
     };
     let engine = state.engine.clone();
     let handle = app.clone();
-    let spawned = std::thread::Builder::new().name("tuldmi-pause-request".into()).spawn(move || {
-        let _serial = TOGGLE.lock();
-        let outcome = if !engine.settings().onboarding_complete {
-            "not-set-up"
-        } else if matches!(engine.status().state, CaptureState::Recording | CaptureState::Starting | CaptureState::Error) {
-            tracing::info!("pausing at the request of another program (tuldmi --pause)");
-            match engine.set_paused(true) {
-                Ok(status) if status.state == CaptureState::Paused => "paused",
-                Ok(_) => "failed",
-                Err(e) => {
-                    tracing::warn!(error = %e, "pause request failed");
-                    "failed"
+    let spawned = std::thread::Builder::new()
+        .name("tuldmi-pause-request".into())
+        .spawn(move || {
+            let _serial = TOGGLE.lock();
+            let outcome = if !engine.settings().onboarding_complete {
+                "not-set-up"
+            } else if matches!(
+                engine.status().state,
+                CaptureState::Recording | CaptureState::Starting | CaptureState::Error
+            ) {
+                tracing::info!("pausing at the request of another program (tuldmi --pause)");
+                match engine.set_paused(true) {
+                    Ok(status) if status.state == CaptureState::Paused => "paused",
+                    Ok(_) => "failed",
+                    Err(e) => {
+                        tracing::warn!(error = %e, "pause request failed");
+                        "failed"
+                    }
                 }
-            }
-        } else {
-            "not-recording"
-        };
-        write_pause_ack(&handle, ack, outcome);
-    });
+            } else {
+                "not-recording"
+            };
+            write_pause_ack(&handle, ack, outcome);
+        });
     if let Err(e) = spawned {
         tracing::warn!(error = %e, "pause request thread failed to start");
         write_pause_ack(app, ack, "failed");
@@ -191,20 +216,44 @@ fn setup(app: &AppHandle) -> Result<(), String> {
     }
     // The main window is configured with `create: false` and built here, after the `--pause`
     // exit above, so asking a tuldMi that isn't running to pause never starts a WebView.
-    let config = app.config().app.windows.iter().find(|w| w.label == "main").cloned().ok_or("main window missing from tauri.conf.json")?;
-    tauri::WebviewWindowBuilder::from_config(app, &config).and_then(|w| w.build()).map_err(|e| e.to_string())?;
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned()
+        .ok_or("main window missing from tauri.conf.json")?;
+    tauri::WebviewWindowBuilder::from_config(app, &config)
+        .and_then(|w| w.build())
+        .map_err(|e| e.to_string())?;
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&data_dir).map_err(|e| format!("cannot create {}: {e}", data_dir.display()))?;
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|e| format!("cannot create {}: {e}", data_dir.display()))?;
 
     let log_dir = data_dir.join("logs");
     let appender = tracing_appender::rolling::daily(&log_dir, "tuldmi.log");
     let (writer, guard) = tracing_appender::non_blocking(appender);
-    let filter = tracing_subscriber::EnvFilter::try_from_env("TULDMI_LOG").unwrap_or_else(|_| "info".into());
-    let _ = tracing_subscriber::fmt().with_env_filter(filter).with_writer(writer).with_ansi(false).try_init();
+    let filter =
+        tracing_subscriber::EnvFilter::try_from_env("TULDMI_LOG").unwrap_or_else(|_| "info".into());
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(writer)
+        .with_ansi(false)
+        .try_init();
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "tuldMi starting");
 
-    let vad_model_path = app.path().resolve(VAD_MODEL, BaseDirectory::Resource).ok().filter(|p| p.exists());
-    let resource = |name: &str| app.path().resolve(name, BaseDirectory::Resource).ok().filter(|p| p.exists());
+    let vad_model_path = app
+        .path()
+        .resolve(VAD_MODEL, BaseDirectory::Resource)
+        .ok()
+        .filter(|p| p.exists());
+    let resource = |name: &str| {
+        app.path()
+            .resolve(name, BaseDirectory::Resource)
+            .ok()
+            .filter(|p| p.exists())
+    };
     let sound_model = resource(SOUND_MODEL).zip(resource(SOUND_LABELS));
     if sound_model.is_none() {
         tracing::warn!("bundled sound classifier not found; music is transcribed like speech");
@@ -218,10 +267,24 @@ fn setup(app: &AppHandle) -> Result<(), String> {
     mac_menu(app).map_err(|e| e.to_string())?;
 
     let sink = Arc::new(events::TauriSink::new(app.clone()));
-    let engine = Engine::start(EngineConfig { data_dir: data_dir.clone(), vad_model_path, suppress_autostart: false, speaker_worker: commands::sidecar("tuldmi-speakers"), sound_model }, sink).map_err(|e| e.to_string())?;
+    let engine = Engine::start(
+        EngineConfig {
+            data_dir: data_dir.clone(),
+            vad_model_path,
+            suppress_autostart: false,
+            speaker_worker: commands::sidecar("tuldmi-speakers"),
+            sound_model,
+        },
+        sink,
+    )
+    .map_err(|e| e.to_string())?;
     let engine = Arc::new(engine);
     let settings = engine.settings();
-    app.manage(AppState { engine: engine.clone(), data_dir, _log_guard: guard });
+    app.manage(AppState {
+        engine: engine.clone(),
+        data_dir,
+        _log_guard: guard,
+    });
 
     tray::update(app, &engine.status());
 
@@ -247,8 +310,12 @@ fn setup(app: &AppHandle) -> Result<(), String> {
 #[cfg(target_os = "macos")]
 fn mac_menu(app: &AppHandle) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItemBuilder, SubmenuBuilder};
-    let settings = MenuItemBuilder::with_id("app-settings", "Settings…").accelerator("Cmd+,").build(app)?;
-    let quit = MenuItemBuilder::with_id("app-quit", "Quit tuldMi").accelerator("Cmd+Q").build(app)?;
+    let settings = MenuItemBuilder::with_id("app-settings", "Settings…")
+        .accelerator("Cmd+,")
+        .build(app)?;
+    let quit = MenuItemBuilder::with_id("app-quit", "Quit tuldMi")
+        .accelerator("Cmd+Q")
+        .build(app)?;
     let app_menu = SubmenuBuilder::new(app, "tuldMi")
         .about(None)
         .separator()
@@ -262,14 +329,33 @@ fn mac_menu(app: &AppHandle) -> tauri::Result<()> {
         .separator()
         .item(&quit)
         .build()?;
-    let edit = SubmenuBuilder::new(app, "Edit").undo().redo().separator().cut().copy().paste().select_all().build()?;
-    let window = SubmenuBuilder::new(app, "Window").minimize().separator().close_window().build()?;
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+    let window = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .separator()
+        .close_window()
+        .build()?;
     app.set_menu(Menu::with_items(app, &[&app_menu, &edit, &window])?)?;
     app.on_menu_event(|app, event| match event.id().as_ref() {
         "app-quit" => app.exit(0),
         "app-settings" => {
             window::show_main(app);
-            let _ = tauri::Emitter::emit(app, events::NAVIGATE, events::Navigate { view: "settings", section: None });
+            let _ = tauri::Emitter::emit(
+                app,
+                events::NAVIGATE,
+                events::Navigate {
+                    view: "settings",
+                    section: None,
+                },
+            );
         }
         _ => {}
     });
@@ -283,7 +369,9 @@ pub fn engine(app: &AppHandle) -> Arc<Engine> {
 /// Global shortcut / tray action. Before onboarding is done there is nothing to pause, so it
 /// just brings the window forward.
 pub fn toggle_pause(app: &AppHandle) {
-    let Some(state) = app.try_state::<AppState>() else { return };
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
     let engine = state.engine.clone();
     if !engine.settings().onboarding_complete {
         window::show_main(app);
@@ -293,13 +381,18 @@ pub fn toggle_pause(app: &AppHandle) {
     // engine to flush, which may itself need the main thread. Never wait here. Toggles are
     // serialized and each reads the state only once the previous one finished, so two quick
     // presses mean pause-then-resume rather than two pauses.
-    let spawned = std::thread::Builder::new().name("tuldmi-toggle".into()).spawn(move || {
-        let _serial = TOGGLE.lock();
-        let recording = matches!(engine.status().state, CaptureState::Recording | CaptureState::Starting | CaptureState::Error);
-        if let Err(e) = engine.set_paused(recording) {
-            tracing::warn!(error = %e, "toggle pause failed");
-        }
-    });
+    let spawned = std::thread::Builder::new()
+        .name("tuldmi-toggle".into())
+        .spawn(move || {
+            let _serial = TOGGLE.lock();
+            let recording = matches!(
+                engine.status().state,
+                CaptureState::Recording | CaptureState::Starting | CaptureState::Error
+            );
+            if let Err(e) = engine.set_paused(recording) {
+                tracing::warn!(error = %e, "toggle pause failed");
+            }
+        });
     if let Err(e) = spawned {
         tracing::warn!(error = %e, "toggle pause thread failed to start");
     }
@@ -313,7 +406,8 @@ pub fn register_shortcut(app: &AppHandle, old: Option<&str>, new: &str) -> Resul
     if new.trim().is_empty() {
         return Ok(());
     }
-    gs.register(new).map_err(|e| format!("Could not register shortcut {new}: {e}"))
+    gs.register(new)
+        .map_err(|e| format!("Could not register shortcut {new}: {e}"))
 }
 
 pub fn sync_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {

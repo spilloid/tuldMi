@@ -283,6 +283,7 @@ their licenses, so they are listed explicitly.
 - whisper.cpp / ggml: MIT, https://github.com/ggml-org/whisper.cpp
 - libopus: BSD-3-Clause, https://opus-codec.org
 - SQLite: Public domain, https://sqlite.org
+- Khronos Vulkan headers (vulkan_core.h and vulkan.hpp): Apache-2.0, selected where dual-licensed; Copyright 2015–2025 The Khronos Group Inc. https://github.com/KhronosGroup/Vulkan-Headers and https://github.com/KhronosGroup/Vulkan-Hpp. License: [Apache-2.0](licenses/Apache-2.0.txt). The SDK/compiler and GPU driver are not bundled.
 
 Compiled into \`tuldmi-speakers\` (speaker separation), from sherpa-onnx's prebuilt
 no-TTS static libraries (no espeak-ng or other text-to-speech code):

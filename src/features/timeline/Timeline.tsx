@@ -12,6 +12,7 @@ import { useUi } from "../../state/ui";
 import { EventRow, MusicKept, isMusic } from "./EventRow";
 import { useEventActions } from "./actions";
 import { TimelineEmpty } from "./TimelineEmpty";
+import { QueueNotice } from "./QueueNotice";
 
 const BOTTOM_SLACK = 64;
 
@@ -205,6 +206,8 @@ export function Timeline({ routeEventId }: { routeEventId?: string }) {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      <QueueNotice />
+      <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={scroller}
         onScroll={onScroll}
@@ -251,6 +254,7 @@ export function Timeline({ routeEventId }: { routeEventId?: string }) {
       </div>
 
       <DayIndex events={events} scroller={scroller} />
+      </div>
 
       <AnimatePresence>
         {range && range.length > 1 && (

@@ -2,6 +2,41 @@
 
 All notable changes to tuldMi are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [0.6.0] — 2026-11-15
+
+### Added
+
+- Native GPU transcription by default: Metal on Apple Silicon Macs and Vulkan on compatible Windows GPUs,
+  with observed backend status and a CPU-only build option. First inference includes shader
+  warmup; measured target-machine results are recorded in docs/GPU.md.
+- OpenAI transcription with an API key stored in Windows Credential Manager, an eight-hour
+  cost calculator and an estimate for processing the existing queue. GPT Transcribe is the
+  default; older discounted models disclose their February 2027 retirement.
+
+- Measured queue duration, oldest pending recording, catch-up estimates that account for both
+  incoming tracks, and an explicit falling-behind state when processing cannot keep up.
+- Review oldest and transcribe-next controls; saved recordings play before transcripts finish.
+- Opt-in server transcription with Authentik device sign-in and in-memory token refresh.
+  Server failures back off without exhausting recording retries. Local processing stays default.
+- CPU faster-whisper worker and Kubernetes manifests for `tuldmi.spillerstech.us`, staged for
+  homelab_ac. The image, DNS, cluster and Authentik provider still require deployment/setup.
+
+### Validation
+
+- Tested on the owner's ARM64 Mac (owner-reported successful operation).
+  Windows Vulkan/CPU speech fixtures verify recognition and speaker token timing.
+  Mac Metal speedup has not been independently benchmarked.
+
+### Limitations
+
+- Direct OpenAI API-key uploads require Windows in this release. Macs support local
+  Metal transcription and the optional Authentik server path; unsupported key controls
+  are visibly disabled.
+
+- Authentik requires sign-in again after restarting; its tokens are held only in memory. The live homelab Authentik
+  flow and target-node throughput still need deployment acceptance testing. One desktop runs
+  one transcription request at a time.
+
 ## [0.4.0] — 2026-11-10
 
 ### Added

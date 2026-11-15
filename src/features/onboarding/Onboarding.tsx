@@ -252,9 +252,10 @@ function PrivacyStep({ retention, onRetention }: { retention: Retention; onReten
   }, [backend]);
   return (
     <>
-      <StepTitle title="Nothing leaves this computer">
-        Audio, transcripts and the search index live in tuldMi's data folder on this device. There's no account, no cloud and no
-        telemetry. The only time tuldMi uses the network is when you choose to download a transcription model.
+      <StepTitle title="Local by default. Your choice.">
+        Audio, transcripts and the search index stay in tuldMi's data folder. Local transcription needs no account and sends
+        no audio to a service. Model downloads use the network; optional server or OpenAI uploads require enabling them
+        in Settings and include queued and future speech. There is no telemetry.
       </StepTitle>
       {dir && (
         <div className="-mt-2 mb-7 flex items-center gap-3 rounded-lg border border-line bg-surface px-3.5 py-2.5">

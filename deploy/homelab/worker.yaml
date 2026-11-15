@@ -1,0 +1,139 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tuldmi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tuldmi-models
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tuldmi
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: tuldmi
+  template:
+    metadata:
+      labels:
+        app: tuldmi
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          # Build/push and replace this tag with the reviewed image digest before enabling Flux.
+          image: ghcr.io/spilloid/tuldmi-worker:0.6.0
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: TULDMI_MODEL
+              value: base.en
+            - name: TULDMI_CPU_THREADS
+              value: "4"
+            - name: TULDMI_CONCURRENCY
+              value: "1"
+            - name: TULDMI_OIDC_ISSUER
+              value: https://auth.spillerstech.us/application/o/tuldmi/
+            - name: TULDMI_OIDC_AUDIENCE
+              value: tuldmi-desktop
+            - name: TULDMI_OIDC_JWKS
+              value: https://auth.spillerstech.us/application/o/tuldmi/jwks/
+          resources:
+            requests:
+              cpu: "2"
+              memory: 512Mi
+            limits:
+              cpu: "4"
+              memory: 2Gi
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: tuldmi-models
+        - name: temporary
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tuldmi
+spec:
+  selector:
+    app: tuldmi
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tuldmi
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-cloudflare
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "130"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "130"
+    # The API verifies Authentik JWTs itself. Browser forward-auth redirects break uploads.
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [tuldmi.spillerstech.us]
+      secretName: tuldmi-spillerstech-us-tls
+  rules:
+    - host: tuldmi.spillerstech.us
+      http:
+        paths:
+          - path: /v1/audio/transcriptions
+            pathType: Exact
+            backend:
+              service:
+                name: tuldmi
+                port:
+                  number: 8080
