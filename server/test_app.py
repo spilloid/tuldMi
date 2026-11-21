@@ -1,5 +1,9 @@
 import asyncio
 import io
+import json
+import os
+import tempfile
+from uuid import uuid4
 import time
 import unittest
 import wave
@@ -35,15 +39,15 @@ class WorkerTests(unittest.TestCase):
         self.jwks.stop()
         self.client.close()
 
-    def upload(self, token=None, data=None):
+    def upload(self, token=None, data=None, clip=None):
         wav = io.BytesIO()
         with wave.open(wav, "wb") as audio:
             audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(16_000)
             audio.writeframes(b"\0\0" * 1600)
-        return self.client.post("/v1/audio/transcriptions",
+        return self.client.post("/v1/library/transcriptions" if clip else "/v1/audio/transcriptions",
             headers={"Authorization": "Bearer " + (token or self.token())},
             files={"file": ("speech.wav", wav.getvalue() if data is None else data, "audio/wav")},
-            data={"model": worker.MODEL, "response_format": "verbose_json"})
+            data={"model": worker.MODEL, "response_format": "verbose_json", **({"clip": json.dumps(clip)} if clip else {})})
 
     def test_missing_and_wrong_audience_or_expired_tokens_are_rejected(self):
         self.assertEqual(self.client.post("/v1/audio/transcriptions").status_code, 401)
@@ -55,6 +59,44 @@ class WorkerTests(unittest.TestCase):
         response = self.upload()
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["segments"][0]["text"], "Fixture words")
+
+    def test_two_laptops_share_durable_audio_only_with_their_account(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, TULDMI_LIBRARY_DIR=folder):
+            worker.library.initialize()
+            headers = {"Authorization": "Bearer " + self.token()}
+            other = {"Authorization": "Bearer " + self.token(sub="another-account")}
+            def clips(**params):
+                return self.client.get("/v1/library/clips", headers=headers, params=params).json()["clips"]
+
+            a = {"id": str(uuid4()), "started": 1000, "source": "mic", "device": "Work"}
+            b = {**a, "id": str(uuid4()), "device": "Travel", "started": 2000, "source": "system"}
+            self.assertEqual(self.upload().status_code, 200)
+            self.assertEqual(clips(), [])
+            for clip in (b, a, a):
+                response = self.upload(clip=clip)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["archived"], clip["id"])
+            self.assertEqual([c["device"] for c in clips(q="Fixture words")], ["Travel", "Work"])
+            self.assertEqual([c["id"] for c in clips(before=2000, before_id=b["id"])], [a["id"]])
+            self.assertFalse(clips(q="absent"))
+            path = "/v1/library/clips/" + a["id"]
+            audio = self.client.get(path + "/audio", headers=headers)
+            self.assertEqual(audio.content[:4], b"RIFF")
+            self.assertEqual(wave.open(io.BytesIO(audio.content)).getnframes(), 1600)
+            self.assertEqual(self.client.get(path + "/audio", headers=other).status_code, 404)
+            self.assertEqual(self.client.get("/v1/library/clips", headers=other).json()["clips"], [])
+            self.assertEqual(self.client.delete(path, headers=other).status_code, 204)
+            self.assertEqual(self.client.get(path + "/audio").status_code, 401)
+            worker.library.initialize()  # reopen the existing store
+            worker.library.expire(1)  # old capture time, newly offloaded
+            self.assertEqual(len(clips()), 2)
+            with worker.library.database() as db:
+                db.execute("UPDATE clips SET received=0 WHERE id=?", (b["id"],))
+            worker.library.expire(1)
+            self.assertEqual([c["id"] for c in clips(q="Fixture")], [a["id"]])
+            self.assertEqual(self.client.delete(path, headers=headers).status_code, 204)
+            self.assertEqual(self.client.get(path + "/audio", headers=headers).status_code, 404)
+            self.assertEqual(clips(q="Fixture"), [])
 
     def test_busy_worker_rejects_without_running_another_inference(self):
         worker.slots.acquire()

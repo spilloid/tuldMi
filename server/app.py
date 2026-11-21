@@ -1,12 +1,17 @@
-"""Stateless CPU transcription worker. The desktop owns durable scheduling and retries."""
+"""CPU transcription worker with an opt-in persistent shared library."""
 import asyncio
 from contextlib import asynccontextmanager
 import io
+import logging
+import sqlite3
 import os
 import threading
 import wave
 
-from fastapi import FastAPI, HTTPException, Request
+from uuid import UUID
+
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+import library
 from fastapi.responses import JSONResponse
 import jwt
 from jwt import PyJWKClient
@@ -39,6 +44,7 @@ def authorize(header: str):
 
 @asynccontextmanager
 async def lifespan(app):
+    await asyncio.to_thread(library.initialize)
     from faster_whisper import WhisperModel
     app.state.model = await asyncio.to_thread(
         WhisperModel, MODEL, device="cpu", compute_type="int8",
@@ -46,8 +52,28 @@ async def lifespan(app):
         num_workers=int(os.getenv("TULDMI_CONCURRENCY", "1")),
         download_root=os.getenv("HF_HOME", "/models"),
     )
-    yield
-    app.state.model = None
+    days = library.retention_days()
+    stop = asyncio.Event()
+
+    async def enforce_retention():
+        while not stop.is_set():
+            try:
+                await asyncio.to_thread(library.expire, days)
+            except sqlite3.Error:
+                logging.getLogger(__name__).error("Shared retention cleanup failed; will retry")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=3600)
+            except TimeoutError:
+                pass
+
+    cleanup = asyncio.create_task(enforce_retention()) if days and os.getenv("TULDMI_LIBRARY_DIR") else None
+    try:
+        yield
+    finally:
+        stop.set()
+        if cleanup:
+            await cleanup
+        app.state.model = None
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -91,9 +117,18 @@ def infer(data: bytes, language: str | None):
 
 @app.post("/v1/audio/transcriptions")
 async def transcribe(request: Request):
+    return await handle_upload(request, archive=False)
+
+
+@app.post("/v1/library/transcriptions")
+async def share(request: Request):
+    return await handle_upload(request, archive=True)
+
+
+async def handle_upload(request, archive):
     # Authorize and admit before parsing uploads. Busy requests get 503 immediately:
     # no growing in-memory server queue, and the desktop retains the recording.
-    await asyncio.to_thread(authorize, request.headers.get("authorization", ""))
+    claims = await asyncio.to_thread(authorize, request.headers.get("authorization", ""))
     if getattr(app.state, "model", None) is None or not slots.acquire(blocking=False):
         return JSONResponse({"detail": "Worker busy"}, status_code=503, headers={"Retry-After": "5"})
     try:
@@ -119,13 +154,22 @@ async def transcribe(request: Request):
             language = form.get("language") or None
             if language is not None and (not isinstance(language, str) or len(language) > 8):
                 raise HTTPException(422, "Invalid language")
+            if archive:
+                item = library.metadata(form.get("clip"))
+                cached = await asyncio.to_thread(library.previous, claims["sub"], item[0])
+                if cached is not None:
+                    return {**cached, "archived": item[0]}
             data = await upload.read(MAX_BYTES + 1)
             try:
                 # Shield inference from disconnect cancellation: keep the admission slot
                 # until native computation actually finishes, including during shutdown.
                 task = asyncio.create_task(asyncio.to_thread(infer, data, language))
                 try:
-                    return await asyncio.shield(task)
+                    result = await asyncio.shield(task)
+                    if archive:
+                        result = await asyncio.to_thread(library.save, claims["sub"], item, result, data)
+                        return {**result, "archived": item[0]}
+                    return result
                 except asyncio.CancelledError:
                     await task
                     raise
@@ -136,3 +180,26 @@ async def transcribe(request: Request):
                 raise HTTPException(503, "Transcription unavailable") from None
     finally:
         slots.release()
+
+
+def account(request):
+    return authorize(request.headers.get("authorization", ""))["sub"]
+
+
+@app.get("/v1/library/clips")
+def timeline(request: Request, q: str = Query("", max_length=200), before: int | None = None,
+             before_id: str = Query("", max_length=36)):
+    return JSONResponse(library.timeline(account(request), q, before, before_id),
+                        headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/v1/library/clips/{clip}/audio")
+def playback(request: Request, clip: UUID):
+    data = library.recording(account(request), str(clip))
+    return Response(data, media_type="audio/wav", headers={"Cache-Control": "private, no-store"})
+
+
+@app.delete("/v1/library/clips/{clip}")
+def remove(request: Request, clip: UUID):
+    library.remove(account(request), str(clip))
+    return Response(status_code=204)
