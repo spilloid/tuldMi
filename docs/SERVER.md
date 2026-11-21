@@ -48,6 +48,8 @@ References: [Authentik device flow](https://docs.goauthentik.io/add-secure-apps/
 
 ## Shared timeline and playback
 
+Use a shared-library desktop build (v0.7.0 preview or later). Preview installers are attached to successful [Windows builds](https://github.com/spilloid/tuldMi/actions/workflows/windows-library-preview.yml) and [Apple Silicon builds](https://github.com/spilloid/tuldMi/actions/workflows/macos.yml). The Windows CI preview is unsigned. Check the build commit before installing. The published v0.6.0 client supports temporary transcription only.
+
 In Settings > Transcription choose **Your server**, check **Keep queued and future speech in my shared library**, enter a distinct laptop name, enable server uploads, and sign in with the same Authentik account on each laptop. Open **Shared timeline** in the navigation rail to search transcripts and play or delete shared clips. Each clip shows the original capture time, source and laptop. Use Refresh for new arrivals and Older recordings for more history. Completed local history is outside the upload queue.
 
 Sharing sends speech to `/v1/library/transcriptions`. The worker stores the WAV, transcript, capture metadata and search index in a SQLite transaction on the library PVC. A receipt for the original event UUID allows the desktop to finish its job. A retry after a lost response returns the existing result. The normal transcription endpoint continues to use temporary audio.
