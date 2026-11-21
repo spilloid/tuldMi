@@ -1,0 +1,33 @@
+name: Windows shared library preview
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/windows-library-preview.yml]
+permissions:
+  contents: read
+jobs:
+  bundle:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Vulkan SDK
+        run: choco install vulkan-sdk -y --no-progress
+      - name: Build preview installer
+        shell: pwsh
+        run: |
+          $sdk = Get-ChildItem C:/VulkanSDK -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $env:VULKAN_SDK = $sdk.FullName
+          ./scripts/release.ps1 -TargetDir C:/tm-build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tuldMi-Windows-x64-Vulkan-preview
+          path: |
+            C:/tm-build/release/bundle/nsis/*-vulkan-setup.exe*
+            C:/tm-build/release/tuldmi.exe
+          if-no-files-found: error

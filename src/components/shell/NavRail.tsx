@@ -1,4 +1,4 @@
-import { AudioLines, Keyboard, Search, Settings2 } from "lucide-react";
+import { AudioLines, Library, Keyboard, Search, Settings2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { navigate } from "../../lib/router";
 import type { Route } from "../../lib/router";
@@ -9,6 +9,9 @@ export function NavRail({ route, onShortcuts }: { route: Route; onShortcuts: () 
     <nav aria-label="Main" className="flex w-[var(--tm-rail-w)] shrink-0 flex-col items-center gap-1 border-r border-line-soft bg-canvas py-3">
       <RailItem label="Timeline" shortcut="T" active={route.view === "timeline"} onClick={() => navigate("/timeline")}>
         <AudioLines size={18} strokeWidth={1.75} />
+      </RailItem>
+      <RailItem label="Shared timeline" active={route.view === "library"} onClick={() => navigate("/library")}>
+        <Library size={18} strokeWidth={1.75} />
       </RailItem>
       <RailItem label="Search" shortcut="CommandOrControl+K" active={route.view === "search"} onClick={() => navigate("/search")}>
         <Search size={18} strokeWidth={1.75} />

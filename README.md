@@ -51,6 +51,10 @@ offloads queued speech to OpenAI or your own authenticated service.
   days unless you widen it; the other side of calls and audio are separate opt-ins. See
   [docs/mcp.md](docs/mcp.md).
 
+## Shared library
+
+Sign in to the same homelab account on both laptops and enable shared storage in Transcription settings. The shared timeline combines speech by capture time and laptop, with transcript search and audio playback. Each laptop controls its local audio cache and the homelab sets retention for shared copies. [Setup and storage](docs/SERVER.md).
+
 ## Privacy
 
 No telemetry or cloud dependency. Local mode only downloads models you explicitly choose,

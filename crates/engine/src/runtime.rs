@@ -1191,7 +1191,7 @@ pub(super) fn transcription(shared: Arc<Shared>, waking: Receiver<()>) {
                 }
                 remote_request = settings.remote_transcription.is_some();
                 provider
-                    .transcribe(&samples, Some(&settings.language))
+                    .transcribe_job(&job, &samples, Some(&settings.language))
                     .map(|transcript| (Some(transcript), gated, samples))
             })();
             // Speakers are separated outside the persist gate (the worker can take seconds) and

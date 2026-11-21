@@ -84,12 +84,20 @@ export function ServerTranscription({ settings, save }: { settings: Settings; sa
           </div>
           <p className="text-sm text-faint">Claude currently accepts text and images, not audio transcription. It is not an audio provider in this release.</p>
         </> : <div className="grid gap-3">
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.libraryDevice !== undefined}
+            onChange={(e) => setDraft({ ...draft, libraryDevice: e.target.checked ? "My laptop" : undefined })} />
+            Keep queued and future speech in my shared library</label>
+          {draft.libraryDevice !== undefined && <label className="block text-sm text-muted">Laptop name
+            <input className="mt-1 block w-full rounded-md border border-line bg-sunken px-3 py-2 text-text" maxLength={64}
+              value={draft.libraryDevice} onChange={(e) => setDraft({ ...draft, libraryDevice: e.target.value })} />
+            Audio and transcripts stay in your account on this server according to its retention policy. You can delete shared copies from Shared timeline.
+          </label>}
           {([["endpoint", "Transcription URL"], ["model", "Server model"], ["issuer", "Authentik issuer URL"], ["clientId", "OAuth public client ID"]] as const).map(([key, label]) => (
             <label key={key} className="block text-sm text-muted">{label}<input className="mt-1 block w-full rounded-md border border-line bg-sunken px-3 py-2 text-text" value={draft[key]} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} spellCheck={false} /></label>
           ))}
         </div>}
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="secondary" disabled={busy || (cloud && (!keySupported || !hasKey))} onClick={() => void save({ remoteTranscription: { ...draft } })}>{cloud ? "Enable OpenAI uploads" : "Enable server uploads"}</Button>
+          <Button size="sm" variant="secondary" disabled={busy || (cloud && (!keySupported || !hasKey)) || draft.libraryDevice?.trim() === ""} onClick={() => void save({ remoteTranscription: { ...draft } })}>{cloud ? "Enable OpenAI uploads" : "Enable server uploads"}</Button>
           {settings.remoteTranscription?.authentication !== "apiKey" && settings.remoteTranscription && <Button size="sm" variant="secondary" onClick={() => void action(async () => setLogin(await backend.beginRemoteSignIn()))} disabled={busy || !!login || backend.kind === "demo"}>Sign in with Authentik</Button>}
           {settings.remoteTranscription && <Button size="sm" variant="ghost" onClick={() => void save({ remoteTranscription: null })}>Use local processing</Button>}
         </div>

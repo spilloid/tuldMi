@@ -1,6 +1,6 @@
 # Homelab transcription
 
-The desktop owns recording, the durable queue, transcripts, playback and retention. Server
+The desktop owns capture and its durable upload queue. The optional shared library stores a separate copy of acknowledged speech and its transcript. Server
 processing is an explicit opt-in under Settings → Transcription. It uploads **existing queued
 recordings and future speech**. Disabling it returns to the selected local model.
 
@@ -24,7 +24,7 @@ single-replica Deployment uses a ReadWriteOnce PVC and Recreate upgrades.
 1. Create a dedicated OAuth2/OIDC provider and application with slug `tuldmi`. Use a **public**
    client, ID `tuldmi-desktop`, an RSA signing key, per-provider issuer mode, and `openid` and
    `offline_access` scopes. Enable device-code and refresh-token grants.
-2. Create the device-code stage/flow and bind it to the provider. Authentik does not ship a
+2. Create a Stage Configuration flow requiring authentication and select it as the active brand's device code flow. Authentik does not ship a
    default device-code flow. Bind the application to the intended users/group and retain the
    normal login/MFA and authorization policies.
 3. Check discovery at
@@ -46,29 +46,17 @@ References: [Authentik device flow](https://docs.goauthentik.io/add-secure-apps/
 [OAuth provider](https://docs.goauthentik.io/add-secure-apps/providers/oauth2/),
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
 
-## Stage for homelab_ac
+## Shared timeline and playback
 
-```powershell
-docker build -t ghcr.io/spilloid/tuldmi-worker:0.6.0 ./server
-kubectl kustomize ./deploy/homelab
-```
+In Settings > Transcription choose **Your server**, check **Keep queued and future speech in my shared library**, enter a distinct laptop name, enable server uploads, and sign in with the same Authentik account on each laptop. Open **Shared timeline** in the navigation rail to search transcripts and play or delete shared clips. Each clip shows the original capture time, source and laptop. Use Refresh for new arrivals and Older recordings for more history. Completed local history is outside the upload queue.
 
-Publish the reviewed image separately and pin its digest before enabling Flux. The manifest tag
-is a planned artifact, not a claim that an image exists. Move these resources into
-`homelab_ac/apps/tuldmi/base`, add its prod overlay and Flux entry, and configure DNS/edge routing
-using that repository's review process. **No cluster, DNS, registry or Authentik configuration is
-changed by this source patch.**
+Sharing sends speech to `/v1/library/transcriptions`. The worker stores the WAV, transcript, capture metadata and search index in a SQLite transaction on the library PVC. A receipt for the original event UUID allows the desktop to finish its job. A retry after a lost response returns the existing result. The normal transcription endpoint continues to use temporary audio.
 
-The pod runs unprivileged with a read-only root, a model-cache PVC and memory-backed temporary
-uploads. First startup downloads model weights; readiness waits for model loading. Only the
-exact transcription API path is public; health/readiness stay cluster-only. Use one Uvicorn
-process per pod, since admission limits and loaded models are per-process.
+Local retention sets the audio cache on each laptop. Pending uploads survive automatic cleanup. Quiet clips and music skipped by the desktop follow their local grace periods. `TULDMI_LIBRARY_RETENTION_DAYS` controls the shared audio **and** transcript from the date the server receives the clip. Zero keeps them until deletion. When positive, cleanup runs on startup and hourly. Deleting a shared copy removes it from every signed-in laptop's shared view. Local deletions and local cache eviction apply to that laptop.
 
-One request runs at a time; busy requests get 503 immediately. Requests are bounded to 10 MiB
-and 0.1–300 seconds of mono 16 kHz PCM WAV. The worker returns segment timestamps and no inferred
-speaker identities. It keeps no audio archive or transcript database, closes temporary uploads
-after each request and disables HTTP access logs. The operator must also control ingress/host
-logging and backups. The desktop cannot enforce another server's retention policy.
+The single worker uses a Longhorn RWO library claim, separate from its model cache. Keep one replica with Recreate upgrades. At mono 16 kHz PCM, budget about 110 MiB per hour of retained speech across all laptops. Monitor free space. For an independent backup use SQLite online backup or an application-consistent volume backup, then restore into an isolated directory and verify playback. The mounted data and replicas alone do not establish a recoverable off-cluster backup.
+
+The worker verifies Authentik tokens on every library request and scopes all operations to the token subject. Browser forward-auth redirects break background clients. Health and readiness stay cluster-only. The packaged manifest pins the image digest and keeps access logging off at the ingress. Flux deployment and the Authentik blueprint are in HomeLab_ac.
 
 ## Queue health
 
@@ -109,10 +97,3 @@ Current 0.6.0 Windows validation: production frontend build and 74 frontend test
 engine validation passes 110 regular tests plus all 3 installed-model tests (113 total), including
 real Vulkan inference, token timing and shutdown/recovery. Workspace clippy/all-targets passes
 with warnings denied. Desktop/MCP/speaker tests add 21 passing tests (134 native total). See GPU.md for fresh target-machine measurements and CPU fallback evidence.
-
-The unchanged Python worker previously passed four HTTP/auth tests and a real CPU tiny.en smoke
-using the public speech fixture. That smoke mocks Authentik signing-key lookup, not inference.
-Kubernetes manifests are rendered locally only. The Docker image has not been built/published,
-and no cluster, DNS or live Authentik/OpenAI integration is claimed validated. The macOS workflow
-now builds Metal by default and checks real speech when the runner exposes a GPU;
-The owner reports the app worked on their ARM64 Mac; no independent Mac benchmark or live remote-service acceptance is inferred.

@@ -447,6 +447,9 @@ pub struct RemoteTranscription {
     pub client_id: String,
     #[serde(default)]
     pub authentication: RemoteAuthentication,
+    /// Opt-in label for speech retained in the Authentik account's shared library.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_device: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

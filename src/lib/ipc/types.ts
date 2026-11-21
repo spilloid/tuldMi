@@ -80,7 +80,7 @@ export interface QueueStatus {
   catchUpMs: number | null;
   fallingBehind: boolean;
 }
-export interface RemoteTranscription { endpoint: string; model: string; issuer: string; clientId: string; authentication: "authentik" | "apiKey" }
+export interface RemoteTranscription { libraryDevice?: string; endpoint: string; model: string; issuer: string; clientId: string; authentication: "authentik" | "apiKey" }
 export interface DeviceLogin { userCode: string; verificationUri: string; interval: number; expiresIn: number }
 
 export interface Speaker {

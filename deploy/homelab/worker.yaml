@@ -14,6 +14,17 @@ spec:
     requests:
       storage: 2Gi
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tuldmi-library
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn-critical
+  resources:
+    requests:
+      storage: 20Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -40,12 +51,15 @@ spec:
           type: RuntimeDefault
       containers:
         - name: worker
-          # Build/push and replace this tag with the reviewed image digest before enabling Flux.
-          image: ghcr.io/spilloid/tuldmi-worker:0.6.0
+          image: ghcr.io/spilloid/tuldmi-worker@sha256:b31f339519a9206eadedb01954456854a941661cfca39a5d05787a0fabf53f22
           ports:
             - name: http
               containerPort: 8080
           env:
+            - name: TULDMI_LIBRARY_RETENTION_DAYS
+              value: "0"
+            - name: TULDMI_LIBRARY_DIR
+              value: /library
             - name: TULDMI_MODEL
               value: base.en
             - name: TULDMI_CPU_THREADS
@@ -85,11 +99,16 @@ spec:
             capabilities:
               drop: [ALL]
           volumeMounts:
+            - name: library
+              mountPath: /library
             - name: models
               mountPath: /models
             - name: temporary
               mountPath: /tmp
       volumes:
+        - name: library
+          persistentVolumeClaim:
+            claimName: tuldmi-library
         - name: models
           persistentVolumeClaim:
             claimName: tuldmi-models
@@ -116,6 +135,7 @@ metadata:
   name: tuldmi
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-cloudflare
+    nginx.ingress.kubernetes.io/enable-access-log: "false"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/proxy-body-size: 10m
     nginx.ingress.kubernetes.io/proxy-read-timeout: "130"
@@ -130,6 +150,13 @@ spec:
     - host: tuldmi.spillerstech.us
       http:
         paths:
+          - path: /v1/library
+            pathType: Prefix
+            backend:
+              service:
+                name: tuldmi
+                port:
+                  number: 8080
           - path: /v1/audio/transcriptions
             pathType: Exact
             backend:

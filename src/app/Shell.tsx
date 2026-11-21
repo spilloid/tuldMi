@@ -11,6 +11,7 @@ import { Titlebar } from "../components/shell/Titlebar";
 import { NavRail } from "../components/shell/NavRail";
 import { CaptureBar } from "../components/shell/CaptureBar";
 import { useToast } from "../components/ui/Toast";
+import { SharedTimeline } from "../features/timeline/SharedTimeline";
 import { Timeline } from "../features/timeline/Timeline";
 import { PlayerDock } from "../features/player/PlayerDock";
 import { CommandPalette } from "../features/search/CommandPalette";
@@ -115,6 +116,7 @@ export function Shell() {
               className="flex min-h-0 flex-1 flex-col"
             >
               {route.view === "timeline" && <Timeline routeEventId={route.eventId} />}
+              {route.view === "library" && <SharedTimeline />}
               {route.view === "search" && <SearchView params={route.params} />}
               {route.view === "settings" && <SettingsView section={route.section} />}
             </motion.div>

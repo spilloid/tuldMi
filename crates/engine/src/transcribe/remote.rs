@@ -44,6 +44,15 @@ pub fn validate(config: &RemoteTranscription) -> Result<()> {
             "use an HTTPS transcription URL without credentials and a model name",
         ));
     }
+    if let Some(label) = &config.library_device
+        && (config.authentication != RemoteAuthentication::Authentik
+            || label.trim().is_empty()
+            || label.chars().count() > 64)
+    {
+        return Err(error(
+            "choose an Authentik server and a laptop name of up to 64 characters",
+        ));
+    }
     if config.authentication == RemoteAuthentication::ApiKey {
         if url.as_str() != "https://api.openai.com/v1/audio/transcriptions"
             || !matches!(
@@ -328,6 +337,7 @@ impl RemoteProvider {
         samples: &[f32],
         language: Option<&str>,
         token: &str,
+        job: Option<&crate::storage::Job>,
     ) -> Result<Transcript> {
         let part = multipart::Part::bytes(wav(samples))
             .file_name("speech.wav")
@@ -358,9 +368,19 @@ impl RemoteProvider {
                 language.to_owned(),
             );
         }
+        let mut endpoint = Url::parse(&self.config.endpoint)
+            .map_err(|_| error("invalid transcription endpoint"))?;
+        let mut receipt = None;
+        if let Some(device) = &self.config.library_device {
+            let job = job.ok_or_else(|| error("shared recording requires a capture ID"))?;
+            let clip = serde_json::json!({"id":job.event_id,"started":job.started_at,"device":device,"source":job.source});
+            form = form.text("clip", clip.to_string());
+            endpoint.set_path("/v1/library/transcriptions");
+            receipt = Some(job.event_id);
+        }
         let response = self
             .http
-            .post(&self.config.endpoint)
+            .post(endpoint)
             .bearer_auth(token)
             .multipart(form)
             .send()
@@ -391,6 +411,21 @@ impl RemoteProvider {
         if bytes.len() > 2_000_000 {
             return Err(error("transcription response too large"));
         }
+        if let Some(expected) = receipt {
+            #[derive(Deserialize)]
+            struct Receipt {
+                archived: uuid::Uuid,
+            }
+            if serde_json::from_slice::<Receipt>(&bytes)
+                .ok()
+                .map(|r| r.archived)
+                != Some(expected)
+            {
+                return Err(error(
+                    "shared library did not confirm storage; audio remains queued",
+                ));
+            }
+        }
         parse_transcript(&bytes, samples.len() as i64 / 16)
     }
 }
@@ -408,6 +443,24 @@ impl TranscriptionProvider for RemoteProvider {
         &self.config.model
     }
     fn transcribe(&mut self, samples: &[f32], language: Option<&str>) -> Result<Transcript> {
+        self.run(samples, language, None)
+    }
+    fn transcribe_job(
+        &mut self,
+        job: &crate::storage::Job,
+        samples: &[f32],
+        language: Option<&str>,
+    ) -> Result<Transcript> {
+        self.run(samples, language, Some(job))
+    }
+}
+impl RemoteProvider {
+    fn run(
+        &self,
+        samples: &[f32],
+        language: Option<&str>,
+        job: Option<&crate::storage::Job>,
+    ) -> Result<Transcript> {
         if samples.iter().any(|s| !s.is_finite()) {
             return Err(error("non-finite audio"));
         }
@@ -419,8 +472,98 @@ impl TranscriptionProvider for RemoteProvider {
             });
         }
         let token = self.auth.lock().bearer(&self.config)?;
-        self.transcribe_with_token(samples, language, &token)
+        self.transcribe_with_token(samples, language, &token, job)
     }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct LibraryClip {
+    id: uuid::Uuid,
+    started: i64,
+    device: String,
+    source: crate::types::Source,
+    transcript: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct LibraryPage {
+    clips: Vec<LibraryClip>,
+    more: bool,
+}
+
+impl RemoteProvider {
+    fn library_request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<reqwest::blocking::RequestBuilder> {
+        if self.config.authentication != RemoteAuthentication::Authentik {
+            return Err(error(
+                "select your Authentik server in Transcription settings",
+            ));
+        }
+        let token = self.auth.lock().bearer(&self.config)?;
+        let mut url = Url::parse(&self.config.endpoint).map_err(|_| error("invalid server URL"))?;
+        url.set_path(path);
+        Ok(self.http.request(method, url).bearer_auth(token))
+    }
+
+    pub fn list_clips(
+        &self,
+        query: &str,
+        before: Option<i64>,
+        before_id: Option<uuid::Uuid>,
+    ) -> Result<LibraryPage> {
+        let mut req = self
+            .library_request(reqwest::Method::GET, "/v1/library/clips")?
+            .query(&[("q", query)]);
+        if let (Some(time), Some(id)) = (before, before_id) {
+            req = req.query(&[("before", time.to_string()), ("before_id", id.to_string())]);
+        }
+        let body = library_bytes(req, 4 * 1024 * 1024)?;
+        serde_json::from_slice(&body).map_err(|_| error("invalid shared timeline response"))
+    }
+
+    pub fn clip_audio(&self, id: uuid::Uuid) -> Result<Vec<u8>> {
+        library_bytes(
+            self.library_request(
+                reqwest::Method::GET,
+                &format!("/v1/library/clips/{id}/audio"),
+            )?,
+            10 * 1024 * 1024,
+        )
+    }
+
+    pub fn delete_clip(&self, id: uuid::Uuid) -> Result<()> {
+        library_bytes(
+            self.library_request(reqwest::Method::DELETE, &format!("/v1/library/clips/{id}"))?,
+            1024,
+        )?;
+        Ok(())
+    }
+}
+
+fn library_bytes(request: reqwest::blocking::RequestBuilder, limit: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let response = request
+        .send()
+        .map_err(|_| error("shared library unreachable"))?;
+    if !response.status().is_success() {
+        return Err(error(match response.status().as_u16() {
+            401 | 403 => "sign in with Authentik in Transcription settings",
+            404 => "shared library or recording unavailable",
+            _ => "shared library request failed",
+        }));
+    }
+    let mut body = Vec::new();
+    response
+        .take(limit + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| error("incomplete shared library response"))?;
+    if body.len() as u64 > limit {
+        return Err(error("shared library response too large"));
+    }
+    Ok(body)
 }
 
 fn parse_transcript(bytes: &[u8], duration_ms: i64) -> Result<Transcript> {
@@ -527,6 +670,7 @@ mod tests {
             model: "gpt-transcribe".into(),
             issuer: String::new(),
             client_id: String::new(),
+            library_device: None,
             authentication: RemoteAuthentication::ApiKey,
         };
         assert!(validate(&config).is_ok());
@@ -586,13 +730,14 @@ mod tests {
                 model: "gpt-transcribe".into(),
                 issuer: String::new(),
                 client_id: String::new(),
+                library_device: None,
                 authentication: RemoteAuthentication::ApiKey,
             },
             http: client(15).unwrap(),
             auth: Arc::new(Mutex::new(RemoteAuth::default())),
         };
         let result = provider
-            .transcribe_with_token(&vec![0.1; 1600], Some("en"), "fixture-api-key")
+            .transcribe_with_token(&vec![0.1; 1600], Some("en"), "fixture-api-key", None)
             .unwrap();
         assert_eq!(result.language.as_deref(), Some("en"));
         assert_eq!(result.segments[0].end_ms, 100);
@@ -643,6 +788,7 @@ mod tests {
             model: "base.en".into(),
             issuer: "https://auth.example/application/o/tuldmi/".into(),
             client_id: "desktop".into(),
+            library_device: None,
             authentication: RemoteAuthentication::Authentik,
         };
         let mut auth = RemoteAuth {
@@ -675,6 +821,7 @@ mod tests {
             model: "base.en".into(),
             issuer: "https://auth.spillerstech.us/application/o/tuldmi/".into(),
             client_id: "tuldmi-desktop".into(),
+            library_device: None,
             authentication: RemoteAuthentication::Authentik,
         };
         assert!(validate(&c).is_ok());

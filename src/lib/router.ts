@@ -9,6 +9,7 @@ import { useSyncExternalStore } from "react";
  * Overlays: `&palette` on any route opens the command palette, `&keys` the shortcut sheet.
  */
 export type Route =
+  | { view: "library" }
   | { view: "timeline"; eventId?: string }
   | { view: "search"; params: URLSearchParams }
   | { view: "settings"; section: string }
@@ -20,6 +21,8 @@ export function parseHash(hash: string): Route {
   const params = new URLSearchParams(qs);
   const parts = path.split("/").filter(Boolean);
   switch (parts[0]) {
+    case "library":
+      return { view: "library" };
     case "search":
       return { view: "search", params };
     case "settings":

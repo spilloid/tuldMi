@@ -266,7 +266,10 @@ export function RetentionSection() {
   if (!settings) return null;
   return (
     <>
-      <SectionHeader title="Retention" description="Choose how long recordings are kept. Transcripts are always kept until you delete them — this only affects audio." />
+      <SectionHeader title={settings.remoteTranscription?.libraryDevice ? "Local audio cache" : "Retention"}
+        description={settings.remoteTranscription?.libraryDevice
+          ? "Choose how long to keep audio on this laptop. Shared speech can be cleared after the server confirms storage. The homelab sets its own retention."
+          : "Choose how long to keep audio on this laptop. Local transcripts stay until you delete them."} />
       <div role="radiogroup" aria-label="Audio retention" className="space-y-2">
         {RETENTION.map((r) => {
           const on = settings.retention === r.value;
@@ -286,7 +289,9 @@ export function RetentionSection() {
               </span>
               <span>
                 <span className="block text-base font-semibold text-text">{r.title}</span>
-                <span className="mt-0.5 block text-sm text-muted">{r.detail}</span>
+                <span className="mt-0.5 block text-sm text-muted">{settings.remoteTranscription?.libraryDevice && r.value === "deleteAfterTranscription"
+                    ? "Free local space after confirmed offload. Replay shared speech from Shared timeline. Quiet clips and music follow the local 24-hour grace period."
+                    : r.detail}</span>
               </span>
             </button>
           );

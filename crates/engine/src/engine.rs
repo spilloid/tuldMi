@@ -318,6 +318,14 @@ impl Engine {
         self.shared.remote_auth.lock().begin(&config)
     }
 
+    pub fn library_provider(&self) -> Result<crate::transcribe::remote::RemoteProvider> {
+        let config = self
+            .settings()
+            .remote_transcription
+            .ok_or_else(|| Error::Other("select your server in Transcription settings".into()))?;
+        crate::transcribe::remote::RemoteProvider::new(config, self.shared.remote_auth.clone())
+    }
+
     pub fn has_transcription_api_key(&self) -> Result<bool> {
         Ok(crate::transcribe::credentials::read()?.is_some())
     }

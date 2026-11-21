@@ -1,5 +1,7 @@
 # Privacy
 
+Shared library is a separate opt-in for queued and future speech. The homelab keeps audio, transcripts, capture time, source and the laptop label under your Authentik account. Its retention policy governs those copies. Delete them from Shared timeline. Local deletion controls apply to the local copy. See [server setup](SERVER.md).
+
 tuldMi records conversations. That makes privacy the product, not a feature. This document says
 exactly what happens to your audio, in plain terms, and what tuldMi does **not** do yet.
 

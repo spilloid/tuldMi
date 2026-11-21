@@ -52,6 +52,14 @@ pub trait TranscriptionProvider: Send {
     }
     /// Catalog id of the loaded model, e.g. "whisper-base.en".
     fn model_id(&self) -> &str;
+    fn transcribe_job(
+        &mut self,
+        _job: &crate::storage::Job,
+        samples: &[f32],
+        language: Option<&str>,
+    ) -> Result<Transcript> {
+        self.transcribe(samples, language)
+    }
     /// 16 kHz mono f32. `language`: None or "auto" = detect.
     fn transcribe(&mut self, samples_16k: &[f32], language: Option<&str>) -> Result<Transcript>;
 }

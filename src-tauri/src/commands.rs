@@ -73,6 +73,43 @@ pub async fn poll_remote_sign_in(state: State<'_, AppState>) -> Res<bool> {
 }
 
 #[tauri::command]
+pub async fn library_clips(
+    state: State<'_, AppState>,
+    query: String,
+    before: Option<i64>,
+    before_id: Option<Uuid>,
+) -> Res<tuldmi_engine::transcribe::remote::LibraryPage> {
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        engine
+            .library_provider()?
+            .list_clips(&query, before, before_id)
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+#[tauri::command]
+pub async fn library_audio(state: State<'_, AppState>, id: Uuid) -> Res<tauri::ipc::Response> {
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.library_provider()?.clip_audio(id))
+        .await
+        .map_err(err)?
+        .map(tauri::ipc::Response::new)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn library_delete(state: State<'_, AppState>, id: Uuid) -> Res<()> {
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.library_provider()?.delete_clip(id))
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+
+#[tauri::command]
 pub async fn has_transcription_api_key(state: State<'_, AppState>) -> Res<bool> {
     let engine = state.engine.clone();
     tauri::async_runtime::spawn_blocking(move || engine.has_transcription_api_key())
