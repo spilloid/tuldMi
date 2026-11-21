@@ -11,7 +11,7 @@
 // Idempotent: skips the download when .sherpa-onnx/lib was extracted from the same archive.
 //   node scripts/sherpa-libs.mjs
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,8 +58,15 @@ const archive = join(out, `${stem}.tar.bz2`);
 writeFileSync(archive, bytes);
 // bsdtar (Windows 10+, macOS) and GNU tar both read bzip2 with -j.
 console.log(`verified ${bytes.length} bytes; extracting ${stem}`);
-const tar = process.platform === "win32" ? join(process.env.SystemRoot, "System32", "tar.exe") : "tar";
-execFileSync(tar, ["-xjf", `${stem}.tar.bz2`], { cwd: out, stdio: "inherit", timeout: 300_000 });
+const extractOptions = { cwd: out, stdio: "inherit", timeout: 300_000 };
+const pythonTar = process.platform === "win32" &&
+  spawnSync("python", ["-c", "import tarfile; assert hasattr(tarfile, 'data_filter')"], { timeout: 5000 }).status === 0;
+if (pythonTar) {
+  // Windows bsdtar can stall on the 900 MiB ONNX library in the bzip2 stream.
+  execFileSync("python", ["-m", "tarfile", "--filter", "data", "-e", archive, out], extractOptions);
+} else {
+  execFileSync("tar", ["-xjf", `${stem}.tar.bz2`], extractOptions);
+}
 rmSync(archive);
 renameSync(join(out, stem, "lib"), join(out, "lib"));
 rmSync(join(out, stem), { recursive: true, force: true });
