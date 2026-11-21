@@ -18,7 +18,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Vulkan SDK
         run: choco install vulkan-sdk -y --no-progress
+      - name: Fetch pinned Windows speaker libraries
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'sherpa-no-tts.tar.bz2'
+          $uri = "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/555637545?run=$env:GITHUB_RUN_ID"
+          curl.exe --fail --location --retry 2 --retry-max-time 360 --connect-timeout 15 --max-time 150 --speed-time 30 --speed-limit 8192 --header 'Accept: application/octet-stream' --output $archive $uri
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:TULDMI_SHERPA_ARCHIVE = $archive
+          node scripts/sherpa-libs.mjs
+      - name: Build desktop helpers
+        timeout-minutes: 45
+        env:
+          CARGO_TARGET_DIR: C:/tm-build
+          CMAKE_GENERATOR: Ninja
+        run: node scripts/build-sidecars.mjs
       - name: Build preview installer
+        timeout-minutes: 90
         shell: pwsh
         run: |
           $sdk = Get-ChildItem C:/VulkanSDK -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1

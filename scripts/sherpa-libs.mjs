@@ -41,10 +41,14 @@ if (existsSync(marker) && readFileSync(marker, "utf8").trim() === `${stem} ${sha
 }
 
 const url = `https://github.com/k2-fsa/sherpa-onnx/releases/download/v${VERSION}/${stem}.tar.bz2`;
-console.log(`fetching ${url}`);
-const response = await fetch(url);
-if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`);
-const bytes = Buffer.from(await response.arrayBuffer());
+async function archiveBytes() {
+  if (process.env.TULDMI_SHERPA_ARCHIVE) return readFileSync(process.env.TULDMI_SHERPA_ARCHIVE);
+  console.log(`fetching ${url}`);
+  const response = await fetch(url, { signal: AbortSignal.timeout(240_000) });
+  if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`);
+  return Buffer.from(await response.arrayBuffer());
+}
+const bytes = await archiveBytes();
 const actual = createHash("sha256").update(bytes).digest("hex");
 if (actual !== sha256) throw new Error(`sha256 mismatch for ${stem}: got ${actual}, pinned ${sha256}`);
 
@@ -53,7 +57,9 @@ mkdirSync(out, { recursive: true });
 const archive = join(out, `${stem}.tar.bz2`);
 writeFileSync(archive, bytes);
 // bsdtar (Windows 10+, macOS) and GNU tar both read bzip2 with -j.
-execFileSync("tar", ["-xjf", `${stem}.tar.bz2`], { cwd: out, stdio: "inherit" });
+console.log(`verified ${bytes.length} bytes; extracting ${stem}`);
+const tar = process.platform === "win32" ? join(process.env.SystemRoot, "System32", "tar.exe") : "tar";
+execFileSync(tar, ["-xjf", `${stem}.tar.bz2`], { cwd: out, stdio: "inherit", timeout: 300_000 });
 rmSync(archive);
 renameSync(join(out, stem, "lib"), join(out, "lib"));
 rmSync(join(out, stem), { recursive: true, force: true });
